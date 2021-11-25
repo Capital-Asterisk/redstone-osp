@@ -119,6 +119,19 @@ struct Option
 
 std::unordered_map<std::string_view, Option> const g_scenes
 {
+    {"redstone", {"LOL what?", [] {
+
+        using namespace redstone;
+        g_activeScene = setup_scene(g_packages.find("lzdb"));
+
+        g_appSetup = [] (ActiveApplication& rApp)
+        {
+            RedstoneScene& rScene
+                    = entt::any_cast<RedstoneScene&>(g_activeScene);
+            rApp.set_on_draw(gen_draw(rScene, rApp));
+            load_gl_resources(*g_activeApplication);
+        };
+    }}},
     {"enginetest", {"Demonstrate basic game engine functionality", [] {
 
         using namespace enginetest;
@@ -349,6 +362,9 @@ void load_a_bunch_of_stuff()
     // Create a new package
     osp::Package &rDebugPack = g_packages.create("lzdb");
 
+    osp::AssetImporter::load_sturdy_file(
+        "Redstone/redstone.gltf", rDebugPack, rDebugPack);
+
     // Load sturdy glTF files
     const std::string_view datapath = {"OSPData/adera/"};
     const std::vector<std::string_view> meshes = 
@@ -402,7 +418,7 @@ void load_a_bunch_of_stuff()
             Primitives::cylinderSolid(3, 16, 1.0f, CylinderFlag::CapEnds));
 
     // Add grids
-    rDebugPack.add<Trade::MeshData>("grid64", Primitives::grid3DSolid({64, 64}));
+    rDebugPack.add<Trade::MeshData>("grid64", Primitives::grid3DSolid({63, 63}));
 
     OSP_LOG_INFO("Resource loading complete");
 }

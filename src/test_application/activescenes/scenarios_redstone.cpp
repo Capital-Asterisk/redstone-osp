@@ -49,10 +49,14 @@
 
 #include <Corrade/Containers/ArrayViewStl.h>
 
+#include <tuple>
+#include <unordered_map>
+
 using Magnum::Trade::MeshData;
 using Magnum::Trade::ImageData2D;
 
 using osp::Vector3;
+using Magnum::Vector3i;
 using osp::Vector3l;
 using osp::Matrix3;
 using osp::Matrix4;
@@ -75,8 +79,8 @@ enum class RsElemTypeId : uint8_t { };
 
 using HierBitset_t = HierarchicalBitset<uint64_t>;
 
-using RsNodeRefCount = IdRefCount<RsNodeId>;
-using RsNodeStorage = RsNodeRefCount::Storage_t;
+using RsNodeRefCount_t = IdRefCount<RsNodeId>;
+using RsNodeSto_t = RsNodeRefCount_t::Storage_t;
 
 template<typename T>
 using element_storage_t = entt::basic_storage<RsElemId, T>;
@@ -100,9 +104,9 @@ struct RsElementUpdate
 
 struct RsDust
 {
-    RsNodeStorage m_own;
-    std::array<RsNodeStorage, 5> m_connections;
-    uint8_t m_connectionCount;
+    RsNodeSto_t m_own;
+    //std::array<RsNodeSto_t, 5> m_connections;
+    //uint8_t m_connectionCount;
 };
 
 size_t advance_multiple_max(ArrayView<HierBitset_t::Iterator> iterators) noexcept
@@ -211,25 +215,31 @@ void calc_dust(
 
         power_level_t const currentPower = nodePowers[size_t(myNode)];
 
-        for (int i = 0; i < data.m_connectionCount; i ++)
-        {
-            RsNodeId const connectedNode = data.m_connections[i];
+        //for (int i = 0; i < data.m_connectionCount; i ++)
+        //{
+        //    RsNodeId const connectedNode = data.m_connections[i];
 
 
-        }
+        //}
 
     }
 }
 
 struct RsRepeater
 {
-    RsNodeStorage m_in;
-    RsNodeStorage m_out;
-    std::array<RsNodeStorage, 2> m_lock;
+    RsNodeSto_t m_in;
+    RsNodeSto_t m_out;
+    std::array<RsNodeSto_t, 2> m_lock;
 
     std::bitset<4> m_bits;
     uint8_t m_delay;
 };
+
+using ElemIdReg_t = osp::UniqueIdRegistry<RsElemId>;
+using ElemIdSto_t = ElemIdReg_t::Storage_t;
+
+using ElemLocIdReg_t = osp::UniqueIdRegistry<RsElemLocalId>;
+using ElemLocIdSto_t = ElemLocIdReg_t::Storage_t;
 
 struct RsWorld
 {
@@ -240,30 +250,102 @@ struct RsWorld
     std::vector<RsNodeConnect> m_nodeConnections;
 
     int m_maxTypes;
-    IdRegistry<RsElemId> m_elementIds;
+    ElemIdReg_t m_elementIds;
     std::vector<RsElemTypeId> m_elementTypes;
     std::vector<RsElemLocalId> m_elementLocals;
 
-    IdRegistry<RsElemLocalId> m_dustIds;
+    ElemLocIdReg_t m_dustIds;
     std::vector<RsDust> m_dustData;
 };
 
 //-----------------------------------------------------------------------------
 
-enum class VxBlockTypeId : uint8_t { };
-enum class VxBlockId : uint32_t { };
+enum class VxBlkTypeId : uint8_t { };       // IDs for each different block type
 
-constexpr Magnum::Vector3i const gc_vxChunkSize{64, 64, 64};
+enum class VxChkBlkId : uint32_t { };       // IDs for blocks within a chunk
+enum class VxSubChkBlkId : uint16_t { };    // IDs for blocks within a subchunk
 
-struct VoxelChunk
+enum class VxChkId : uint16_t { };          // IDs for currently loaded chunks
+enum class VxSubChkId : uint32_t { };       // IDs for subchunks within a chunk
+
+
+constexpr Vector3i const gc_vxSubChunkSize{8, 8, 8};
+constexpr Vector3i const gc_vxSubChunkPerChunk{8, 8, 8};
+constexpr Vector3i const gc_vxChunkSize
 {
-    Array<VxBlockTypeId> m_blockTypes;
+    gc_vxSubChunkPerChunk.x() * gc_vxSubChunkSize.x(),
+    gc_vxSubChunkPerChunk.y() * gc_vxSubChunkSize.y(),
+    gc_vxSubChunkPerChunk.z() * gc_vxSubChunkSize.z()
 };
 
-struct ACtxVoxels
+template <typename VEC_T>
+constexpr typename VEC_T::Type pos_index(VEC_T chunkSize, VEC_T pos) noexcept
 {
-    osp::IdSet<std::string_view, VxBlockTypeId> m_blockTypes;
+    return   pos.x()
+           + pos.z() * chunkSize.x()
+           + pos.y() * chunkSize.x() * chunkSize.z();
+}
 
+constexpr VxChkBlkId chunk_block_id(Vector3i pos) noexcept
+{
+    return VxChkBlkId(pos_index(gc_vxChunkSize, pos));
+}
+
+constexpr VxSubChkId subchunk_id(Vector3i pos) noexcept
+{
+    return VxSubChkId(pos_index(gc_vxSubChunkPerChunk, pos));
+}
+
+constexpr VxSubChkBlkId subchunk_block_id(Vector3i pos) noexcept
+{
+    return VxSubChkBlkId(pos_index(gc_vxSubChunkSize, pos));
+}
+
+struct ACtxVxBlocks
+{
+    osp::IdSet<std::string_view, VxBlkTypeId> m_typeIds;
+};
+
+using ChunkCoord_t = std::array<int, 3>;
+
+struct ACtxVxLoadedChunks
+{
+    IdRegistry<VxChkId> m_chunkId;
+    std::map< ChunkCoord_t, VxChkId > m_chunkMap;
+    std::vector< Array<VxBlkTypeId> > m_chunkBlockTypes;
+};
+
+struct BlkRsDust
+{
+    ElemLocIdSto_t m_elem;
+};
+
+struct BlkPlace
+{
+    Vector3i m_pos;
+    Vector3 m_lookDir;
+};
+
+struct BlkRemove
+{
+
+};
+
+struct PlaceBlocks
+{
+    std::unordered_map< VxBlkTypeId, std::vector<BlkPlace> > m_place;
+    // streams of blocks to place
+    // streams of blocks directly assigned m_chunkBlockTypes
+    // scan through stream, and see which block types it contains, add to set
+    // pass it to a main block placer system, which dispatches all requireds
+};
+
+struct ACtxVxRsDusts
+{
+    using SubChunkDust_t = Array<BlkRsDust>;
+    using ChunkDust_t = entt::basic_storage<VxChkBlkId, SubChunkDust_t>;
+    // m_dusts[VxChkId][VxSubChkId][VxSubChkBlkId]
+    std::vector<ChunkDust_t> m_dusts;
 };
 
 //-----------------------------------------------------------------------------

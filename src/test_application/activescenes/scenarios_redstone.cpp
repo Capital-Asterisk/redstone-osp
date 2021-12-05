@@ -491,8 +491,8 @@ struct RedstoneRenderer
     osp::active::ActiveEnt m_camera;
     ACtxCameraController m_camCtrl;
 
-    osp::shader::ACtxPhongData m_phong{};
-    osp::shader::ACtxMeshVisualizerData m_visualizer;
+    osp::shader::ACtxDrawPhong m_phong{};
+    osp::shader::ACtxDrawMeshVisualizer m_visualizer;
 };
 
 /**
@@ -521,9 +521,12 @@ void render_test_scene(
     // results into the fwd_opaque render group
     {
         MaterialData &rMatCommon = rScene.m_drawing.m_materials[gc_mat_common];
-        Phong::assign_phong_opaque(
-                rMatCommon.m_added, rGroupFwdTransparent.m_entities,
-                rScene.m_drawing.m_opaque, rRenderer.m_renderGl.m_diffuseTexGl,
+        assign_phong(
+                rMatCommon.m_added,
+                &rGroupFwdTransparent.m_entities,
+                &rGroupFwdTransparent.m_entities,
+                rScene.m_drawing.m_opaque,
+                rRenderer.m_renderGl.m_diffuseTexGl,
                 rRenderer.m_phong);
         rMatCommon.m_added.clear();
     }
@@ -532,7 +535,7 @@ void render_test_scene(
     {
         MaterialData &rMatVisualizer
                 = rScene.m_drawing.m_materials[gc_mat_visualizer];
-        MeshVisualizer::assign(
+        assign_visualizer(
                 rMatVisualizer.m_added, rGroupFwdTransparent.m_entities,
                 rRenderer.m_visualizer);
         rMatVisualizer.m_added.clear();

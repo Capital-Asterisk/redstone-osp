@@ -147,3 +147,9 @@ holdable = true
 primary = "LCtrl+1"
 secondary = "None"
 holdable = true
+
+[rs_place_dust]
+primary = "R"
+secondary = "None"
+holdable = true
+

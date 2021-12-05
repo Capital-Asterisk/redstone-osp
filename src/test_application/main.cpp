@@ -418,7 +418,7 @@ void load_a_bunch_of_stuff()
             Primitives::cylinderSolid(3, 16, 1.0f, CylinderFlag::CapEnds));
 
     // Add grids
-    rDebugPack.add<Trade::MeshData>("grid64", Primitives::grid3DSolid({63, 63}));
+    rDebugPack.add<Trade::MeshData>("grid64", Magnum::Primitives::grid3DWireframe({63, 63}));
 
     OSP_LOG_INFO("Resource loading complete");
 }

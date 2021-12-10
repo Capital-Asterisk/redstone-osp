@@ -269,23 +269,12 @@ struct RsWorld
 enum class VxBlkTypeId : uint8_t { };       // IDs for each different block type
 
 enum class VxChkBlkId : uint32_t { };       // IDs for blocks within a chunk
-enum class VxSubChkBlkId : uint16_t { };    // IDs for blocks within a subchunk
 
 enum class VxChkId : uint16_t { };          // IDs for currently loaded chunks
-enum class VxSubChkId : uint32_t { };       // IDs for subchunks within a chunk
 
-
-constexpr Vector3i const gc_vxSubChunkDim{8, 8, 8};
-constexpr Vector3i const gc_vxSubChunkPerChunk{8, 8, 8};
-constexpr Vector3i const gc_vxChunkDim
-{
-    gc_vxSubChunkPerChunk.x() * gc_vxSubChunkDim.x(),
-    gc_vxSubChunkPerChunk.y() * gc_vxSubChunkDim.y(),
-    gc_vxSubChunkPerChunk.z() * gc_vxSubChunkDim.z()
-};
-
-constexpr size_t const gc_vxChunkSize{ gc_vxChunkDim.x() * gc_vxChunkDim.y() * gc_vxChunkDim.z() };
-
+constexpr Vector3i const gc_vxChunkDim{8, 8, 8};
+constexpr Vector3i::Type const gc_vxChunkSize
+        = gc_vxChunkDim.x() * gc_vxChunkDim.y() * gc_vxChunkDim.z();
 
 template <typename VEC_T>
 constexpr typename VEC_T::Type pos_index(VEC_T chunkSize, VEC_T pos) noexcept
@@ -298,16 +287,6 @@ constexpr typename VEC_T::Type pos_index(VEC_T chunkSize, VEC_T pos) noexcept
 constexpr VxChkBlkId chunk_block_id(Vector3i pos) noexcept
 {
     return VxChkBlkId(pos_index(gc_vxChunkDim, pos));
-}
-
-constexpr VxSubChkId subchunk_id(Vector3i pos) noexcept
-{
-    return VxSubChkId(pos_index(gc_vxSubChunkPerChunk, pos));
-}
-
-constexpr VxSubChkBlkId subchunk_block_id(Vector3i pos) noexcept
-{
-    return VxSubChkBlkId(pos_index(gc_vxSubChunkDim, pos));
 }
 
 using ChunkCoord_t = std::array<int, 3>;
@@ -348,8 +327,7 @@ struct BlkRsDust
 
 struct ACtxVxRsDusts
 {
-    using SubChunkDust_t = Array<BlkRsDust>;
-    using ChunkDust_t = entt::basic_storage<VxChkBlkId, SubChunkDust_t>;
+    using ChunkDust_t = Array<BlkRsDust>;
     // m_dusts[VxChkId][VxSubChkId][VxSubChkBlkId]
     std::vector<ChunkDust_t> m_dusts;
 };
@@ -358,11 +336,15 @@ void place_block_ids(VxBlkTypeId id, ArrayView<BlkPlace const> placements, Array
 {
     for (BlkPlace const& place : placements)
     {
+        assert(place.m_pos.x() < gc_vxChunkDim.x());
+        assert(place.m_pos.y() < gc_vxChunkDim.y());
+        assert(place.m_pos.z() < gc_vxChunkDim.z());
+
         VxChkBlkId const block = chunk_block_id(place.m_pos);
 
         OSP_LOG_INFO("block ID: {}", size_t(block));
 
-        assert(size_t(block) < blockIds.size());
+
         blockIds[size_t(block)] = id;
     }
 }
@@ -388,8 +370,7 @@ constexpr int const gc_mat_visualizer  = 3;
 
 constexpr int const gc_maxMaterials = 4;
 
-std::vector<std::string_view> const gc_meshsUsed =
-{
+auto const gc_meshsUsed = std::array{
     "Redstone/redstone:Block",
     "Redstone/redstone:TorchLit",
     "Redstone/redstone:Repeater",
@@ -481,22 +462,25 @@ entt::any setup_scene(osp::Package &rPkg)
 
     // Add cube mesh to cube
     rScene.m_drawing.m_mesh.emplace(
-            rScene.m_cube, ACompMesh{ rPkg.get<MeshData>("cube") });
+            rScene.m_cube, ACompMesh{ rPkg.get<MeshData>("cube_wireframe") });
     rScene.m_drawing.m_meshDirty.push_back(rScene.m_cube);
 
-    // Add common material to cube
+    // Add flat material to cube
     {
-        MaterialData &rMatCommon = rScene.m_drawing.m_materials[gc_mat_common];
-        rMatCommon.m_comp.emplace(rScene.m_cube);
-        rMatCommon.m_added.push_back(rScene.m_cube);
+        MaterialData &rMatFlat = rScene.m_drawing.m_materials[gc_mat_flat];
+        rMatFlat.m_comp.emplace(rScene.m_cube);
+        rMatFlat.m_added.push_back(rScene.m_cube);
     }
 
     // Add transform and draw transform
     rScene.m_basic.m_transform.emplace(rScene.m_cube, ACompTransform{ Matrix4::scaling(Vector3{0.5}) });
     rScene.m_drawing.m_drawTransform.emplace(rScene.m_cube);
 
+    // Make cube green
+    rScene.m_drawing.m_color.emplace(rScene.m_cube, 0x67ff00ff_rgbaf);
+
     // Add opaque and visible component
-    //rScene.m_drawing.m_opaque.emplace(rScene.m_cube);
+    rScene.m_drawing.m_opaque.emplace(rScene.m_cube);
     rScene.m_drawing.m_visible.emplace(rScene.m_cube);
 
     // Add cube to hierarchy, parented to root
@@ -518,13 +502,15 @@ entt::any setup_scene(osp::Package &rPkg)
         rMatFlat.m_added.push_back(floorMesh);
     }
 
+    // Make floor grey
+    rScene.m_drawing.m_color.emplace(floorMesh, 0x808080ff_rgbaf);
+
     // Add transform, draw transform, opaque, and visible
     rScene.m_basic.m_transform.emplace(
             floorMesh, ACompTransform{Matrix4::translation({32.0f, 0.0f, 32.0f}) * Matrix4::rotationX(-90.0_degf) * Matrix4::scaling({32.0f, 32.0f, 0.0f})});
     rScene.m_drawing.m_drawTransform.emplace(floorMesh);
     rScene.m_drawing.m_opaque.emplace(floorMesh);
     rScene.m_drawing.m_visible.emplace(floorMesh);
-
 
     // Add floor root to hierarchy root
     SysHierarchy::add_child(
@@ -566,11 +552,12 @@ osp::active::ActiveEnt add_mesh_quick(RedstoneScene& rScene, Matrix4 const& tf, 
     rScene.m_drawing.m_diffuseDirty.push_back(ent);
 
     // Add common material to cube
-    MaterialData &rMatCommon = rScene.m_drawing.m_materials[gc_mat_common];
+    MaterialData &rMatCommon = rScene.m_drawing.m_materials[gc_mat_flat];
     rMatCommon.m_comp.emplace(ent);
     rMatCommon.m_added.push_back(ent);
 
     // Add transform and draw transform
+    rScene.m_drawing.m_color.emplace(ent, 0x880000ff_rgbaf);
     rScene.m_basic.m_transform.emplace( ent, ACompTransform{tf} );
     rScene.m_drawing.m_drawTransform.emplace(ent);
 
@@ -607,7 +594,7 @@ void update_blocks(RedstoneScene& rScene, ChunkBlockChanges &rBlkChange)
         for (BlkPlace const& place : it->second)
         {
             Vector3 const pos = Vector3(place.m_pos) + Vector3{0.5, 0.5, 0.5};
-            add_mesh_quick(rScene, Matrix4::translation(pos), rScene.m_meshs.at("Redstone/redstone:TorchLit"));
+            add_mesh_quick(rScene, Matrix4::translation(pos), rScene.m_meshs.at("Redstone/redstone:Dust"));
         }
     }
 
@@ -842,6 +829,7 @@ on_draw_t gen_draw(RedstoneScene& rScene, ActiveApplication& rApp)
         rFlat.m_shaderDiffuse
                 = rGlResources.get_or_reserve<Flat>("textured");
         rFlat.m_pDrawTf       = &rScene.m_drawing.m_drawTransform;
+        rFlat.m_pColor        = &rScene.m_drawing.m_color;
         rFlat.m_pDiffuseTexGl = &pRenderer->m_renderGl.m_diffuseTexGl;
         rFlat.m_pMeshGl       = &pRenderer->m_renderGl.m_meshGl;
     }
@@ -854,6 +842,7 @@ on_draw_t gen_draw(RedstoneScene& rScene, ActiveApplication& rApp)
         rPhong.m_shaderDiffuse
                 = rGlResources.get_or_reserve<Phong>("textured");
         rPhong.m_pDrawTf       = &rScene.m_drawing.m_drawTransform;
+        rPhong.m_pColor        = &rScene.m_drawing.m_color;
         rPhong.m_pDiffuseTexGl = &pRenderer->m_renderGl.m_diffuseTexGl;
         rPhong.m_pMeshGl       = &pRenderer->m_renderGl.m_meshGl;
     }

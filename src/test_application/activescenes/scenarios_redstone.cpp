@@ -557,7 +557,6 @@ osp::active::ActiveEnt add_mesh_quick(RedstoneScene& rScene, Matrix4 const& tf, 
     rMatCommon.m_added.push_back(ent);
 
     // Add transform and draw transform
-    rScene.m_drawing.m_color.emplace(ent, 0x880000ff_rgbaf);
     rScene.m_basic.m_transform.emplace( ent, ACompTransform{tf} );
     rScene.m_drawing.m_drawTransform.emplace(ent);
 
@@ -594,10 +593,22 @@ void update_blocks(RedstoneScene& rScene, ChunkBlockChanges &rBlkChange)
         for (BlkPlace const& place : it->second)
         {
             Vector3 const pos = Vector3(place.m_pos) + Vector3{0.5, 0.5, 0.5};
-            add_mesh_quick(rScene, Matrix4::translation(pos), rScene.m_meshs.at("Redstone/redstone:Dust"));
+            ActiveEnt meshEnt = add_mesh_quick(rScene, Matrix4::translation(pos), rScene.m_meshs.at("Redstone/redstone:Dust"));
+
+            rScene.m_drawing.m_color.emplace(meshEnt, 0x880000ff_rgbaf);
         }
     }
 
+    // Place redstone torches
+    if (auto it = rBlkChange.m_place.find(rScene.m_blkTypeIds.id_of("torch"));
+        it != rBlkChange.m_place.end())
+    {
+        for (BlkPlace const& place : it->second)
+        {
+            Vector3 const pos = Vector3(place.m_pos) + Vector3{0.5, 0.5, 0.5};
+            add_mesh_quick(rScene, Matrix4::translation(pos), rScene.m_meshs.at("Redstone/redstone:Torch"));
+        }
+    }
 }
 
 /**
@@ -626,6 +637,7 @@ struct RedstoneRenderer
      : m_camCtrl(rApp.get_input_handler())
      , m_controls(&rApp.get_input_handler())
      , m_btnPlaceDust(m_controls.button_subscribe("rs_place_dust"))
+     , m_btnPlaceTorch(m_controls.button_subscribe("rs_place_torch"))
     { }
 
     osp::active::ACtxRenderGroups m_renderGroups{};
@@ -642,6 +654,7 @@ struct RedstoneRenderer
 
     osp::input::ControlSubscriber m_controls;
     osp::input::EButtonControlIndex m_btnPlaceDust;
+    osp::input::EButtonControlIndex m_btnPlaceTorch;
 };
 
 /**
@@ -938,7 +951,18 @@ on_draw_t gen_draw(RedstoneScene& rScene, ActiveApplication& rApp)
                     BlkPlace{ target, lookDir }
                 );
 
-                OSP_LOG_INFO("Place! ({}, {}, {})", target.x(), target.y(), target.z());
+                OSP_LOG_INFO("Place Dust: ({}, {}, {})", target.x(), target.y(), target.z());
+            }
+
+            if (event.m_index == pRenderer->m_btnPlaceTorch
+                && event.m_event == EButtonControlEvent::Triggered)
+            {
+                // Place torch
+                changes.m_place[rScene.m_blkTypeIds.id_of("torch")].push_back(
+                    BlkPlace{ target, lookDir }
+                );
+
+                OSP_LOG_INFO("Place Torch: ({}, {}, {})", target.x(), target.y(), target.z());
             }
         }
 

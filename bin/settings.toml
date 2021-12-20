@@ -153,3 +153,9 @@ primary = "R"
 secondary = "None"
 holdable = true
 
+[rs_place_torch]
+primary = "T"
+secondary = "None"
+holdable = true
+
+

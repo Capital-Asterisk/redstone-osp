@@ -412,6 +412,7 @@ void load_a_bunch_of_stuff()
 
     // Add a default primitives
     rDebugPack.add<Trade::MeshData>("cube", Primitives::cubeSolid());
+    rDebugPack.add<Trade::MeshData>("cube_wireframe", Primitives::cubeWireframe());
     rDebugPack.add<Trade::MeshData>("sphere", Primitives::icosphereSolid(2));
     rDebugPack.add<Trade::MeshData>(
             "cylinder",

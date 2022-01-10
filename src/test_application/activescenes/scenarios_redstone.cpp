@@ -39,7 +39,9 @@
 #include <osp/Shaders/Phong.h>
 #include <osp/Shaders/MeshVisualizer.h>
 
-#include <osp/id_registry.h>
+#include <longeron/containers/intarray_multimap.hpp>
+#include <longeron/id_management/registry.hpp>
+#include <longeron/id_management/refcount.hpp>
 #include <osp/id_set.h>
 #include <osp/Resource/Package.h>
 
@@ -68,9 +70,9 @@ using osp::Vector3l;
 using osp::Matrix3;
 using osp::Matrix4;
 
-using osp::IdRegistry;
-using osp::HierarchicalBitset;
-using osp::IdRefCount;
+using lgrn::IdRegistry;
+using lgrn::HierarchicalBitset;
+using lgrn::IdRefCount;
 
 // for the 0xrrggbb_rgbf and angle literals
 using namespace Magnum::Math::Literals;
@@ -78,11 +80,15 @@ using namespace Magnum::Math::Literals;
 using Corrade::Containers::ArrayView;
 using Corrade::Containers::Array;
 
-using HierBitset_t = osp::HierarchicalBitset<uint64_t>;
+using HierBitset_t = lgrn::HierarchicalBitset<uint64_t>;
 
 
 namespace testapp::redstone
 {
+
+//-----------------------------------------------------------------------------
+
+/* Types and fundementals */
 
 enum class BlkTypeId : uint8_t { };       // IDs for each different block type
 enum class ChkBlkId : uint32_t { };       // IDs for blocks within a chunk
@@ -119,6 +125,8 @@ using ChunkCoord_t = std::array<int, 3>;
 
 //-----------------------------------------------------------------------------
 
+/* Block place commands */
+
 /**
  * @brief Command to place a block in a chunk at a certain position and direction
  */
@@ -131,6 +139,8 @@ struct ChkBlkPlace
 using ChkBlkPlacements_t = std::unordered_map< BlkTypeId, std::vector<ChkBlkPlace> >;
 
 //-----------------------------------------------------------------------------
+
+/* Block change updates */
 
 /**
  * @brief Dirty flags for added and removed blocks within a chunk
@@ -158,6 +168,8 @@ ChkBlkChanges& assure_chunk_update(ChkBlkTypeChanges_t &rBlkUpd, BlkTypeId blkTy
 }
 
 //-----------------------------------------------------------------------------
+
+/* Sides and Directions */
 
 enum class ESide : uint8_t
 {
@@ -238,18 +250,56 @@ DiffBlk inter_chunk_pos(Vector3i pos)
 
 //-----------------------------------------------------------------------------
 
+/* Connection updates and subscribers */
+
+
 /**
  * @brief Blocks within a chunk marked for connection update
  */
 struct ChkBlkConnect
 {
+    ChkBlkConnect() = default;
+    ChkBlkConnect(ChkBlkConnect const& copy) = delete;
+    ChkBlkConnect(ChkBlkConnect&& move)
+     : m_connect{std::move(move.m_connect)}
+    {};
+
     HierBitset_t m_connect;
     std::atomic_flag m_lock = ATOMIC_FLAG_INIT;
 };
 
 using ChkBlkTypeConnect_t = std::unordered_map<BlkTypeId, ChkBlkConnect>;
 
+struct BlkSubscriber
+{
+    ChunkId m_chunk;
+    ChkBlkId m_block;
+};
+
+constexpr int const gc_subscribersPerChunk = 4;
+
+using ChkSubscriberId_t = int;
+
+struct ChkBlkSubscriberDiv
+{
+    std::atomic_flag m_lock = ATOMIC_FLAG_INIT;
+    lgrn::IntArrayMultiMap<ChkSubscriberId_t, BlkSubscriber> m_blk;
+};
+
+struct ChkBlkSubscribers
+{
+    std::array<ChkBlkSubscriberDiv, gc_subscribersPerChunk> m_subscribers;
+
+    std::pair<ChkSubscriberId_t, int> chkblkid_to_subscriber_div(ChkBlkId id)
+    {
+        return { uint32_t(id) / gc_subscribersPerChunk,
+                 uint32_t(id) % gc_subscribersPerChunk };
+    }
+};
+
 //-----------------------------------------------------------------------------
+
+/* Common Loaded Chunk data */
 
 struct ACtxVxLoadedChunks
 {
@@ -259,10 +309,12 @@ struct ACtxVxLoadedChunks
 
     std::vector< Array<BlkTypeId> > m_blkTypes;
     std::vector< Array<Magnum::BoolVector3> > m_blkDirection;
-    std::vector< std::vector<bool> > m_blkSensitive;
+    //std::vector< std::vector<bool> > m_blkSensitive;
 
     std::vector<ChkBlkTypeChanges_t> m_blkTypeChanges;
     std::vector<ChkBlkTypeConnect_t> m_blkTypeConnect;
+
+    std::vector<ChkBlkSubscribers> m_blkSubscribers;
 };
 
 //-----------------------------------------------------------------------------
@@ -360,7 +412,7 @@ bool try_update_chunk_connections(
                     rConnect.m_connect.set(size_t(sideBlkId));
                 }
             }
-            else if (sideChunks[i] != osp::id_null<ChunkId>())
+            else if (sideChunks[i] != lgrn::id_null<ChunkId>())
             {
                 ESide const side = vec_to_side(diff.m_chunkDelta);
                 ChunkId const chkId = sideChunks.at(size_t(side));
@@ -439,7 +491,7 @@ auto const gc_meshsUsed = std::array{
 struct RedstoneScene
 {
     // ID registry generates entity IDs, and keeps track of which ones exist
-    osp::IdRegistry<osp::active::ActiveEnt> m_activeIds;
+    lgrn::IdRegistry<osp::active::ActiveEnt> m_activeIds;
 
     // Components and supporting data structures
     osp::active::ACtxBasic          m_basic;
@@ -559,17 +611,25 @@ entt::any setup_scene(osp::Package &rPkg)
 
     // Create single chunk
     rScene.m_singleChunk = rScene.m_chunks.m_ids.create();
-    rScene.m_chunks.m_blkTypes.resize(1);
-    rScene.m_chunks.m_blkSensitive.resize(1);
-    rScene.m_chunkDusts.m_dusts.resize(1);
+
+    // Allocate spaces for that single chunk
+    size_t const capacity = rScene.m_chunks.m_ids.capacity();
+    rScene.m_chunks.m_blkTypeChanges.resize(capacity);
+    rScene.m_chunks.m_blkTypeConnect.resize(capacity);
+    rScene.m_chunks.m_blkTypes.resize(capacity);
+    rScene.m_chunkDusts.m_dusts.resize(capacity);
+
+    // Allocate buffers used by the chunk
+    rScene.m_chunks.m_blkTypeConnect[0][rScene.m_blkTypeIds.id_of("dust")]
+            .m_connect.resize(gc_chunkSize);
     rScene.m_chunkDusts.m_dusts[0]
             = Array<BlkRsDust>{Corrade::DirectInit, gc_chunkSize};
 
-    // Allocate block type array, fill with air
+    // Fill single chunk with air
     rScene.m_chunks.m_blkTypes[0]
             = Array<BlkTypeId>{Corrade::DirectInit, gc_chunkSize,
                                  rScene.m_blkTypeIds.id_of("air")};
-    rScene.m_chunks.m_blkSensitive[0].resize(gc_chunkSize, false);
+    //rScene.m_chunks.m_blkSensitive[0].resize(gc_chunkSize, false);
 
     // Keep track of meshes
     for (std::string_view const str : gc_meshsUsed)
@@ -617,10 +677,12 @@ osp::active::ActiveEnt add_mesh_quick(RedstoneScene& rScene, Matrix4 const& tf, 
 }
 
 void update_chunk_various(
-        RedstoneScene& rScene, ChunkId chkId,
-        ChkBlkTypeChanges_t const& blkUpdates)
+        RedstoneScene& rScene, ChunkId chkId)
 {
     using namespace osp::active;
+
+    ChkBlkTypeChanges_t const& typeChanges = rScene.m_chunks.m_blkTypeChanges[size_t(chkId)];
+    ChkBlkTypeConnect_t const& typeConnect = rScene.m_chunks.m_blkTypeConnect[size_t(chkId)];
 
     ACtxVxRsDusts::ChunkDust_t &rDusts = rScene.m_chunkDusts.m_dusts.at(size_t(chkId));
 
@@ -628,14 +690,18 @@ void update_chunk_various(
 
     // System: Redstone Dust connector
 
-    if (auto it = blkUpdates.find(dustId);
-        it != blkUpdates.end())
+    if (auto it = typeConnect.find(dustId);
+        it != typeConnect.end())
     {
-        HierBitset_t const& updDust = it->second.m_added;
+        HierBitset_t const& updDust = it->second.m_connect;
 
         for (size_t blockId : updDust)
         {
             Vector3i const pos = index_to_pos(blockId);
+
+            BlkRsDust &rDust = rDusts[blockId];
+            rDust.m_connected = EMultiDir(0);
+            rDust.m_rises = EMultiDir(0);
 
             constexpr std::array< std::pair<Vector3i, EMultiDir>, 4 > const c_sides
             {{
@@ -645,10 +711,7 @@ void update_chunk_various(
                 { { 0,  0, -1}, EMultiDir::NEG_Z }
             }};
 
-            BlkRsDust &rDust = rDusts[blockId];
-            rDust.m_connected = EMultiDir(0);
-            rDust.m_rises = EMultiDir(0);
-
+            // Loop through surrounding 4 blocks
             for (std::pair<Vector3i, EMultiDir> const& pair : c_sides)
             {
                 DiffBlk const interpos = inter_chunk_pos(pos + pair.first);
@@ -659,10 +722,6 @@ void update_chunk_various(
                     OSP_LOG_INFO("BESIDE!");
                 }
             }
-
-            //DiffBlk const below = inter_chunk_pos(pos + Vector3i{1, 0, 0});
-            //OSP_LOG_INFO("pos: ({}, {}, {})", below.pos.x(), below.pos.y(), below.pos.z());
-            //OSP_LOG_INFO("chunk: ({}, {}, {})", below.chunkDelta.x(), below.chunkDelta.y(), below.chunkDelta.z());
         }
     }
 
@@ -672,8 +731,8 @@ void update_chunk_various(
     Vector3 chunkOffset{0}; // TODO
 
     // Create redstone dust models
-    if (auto it = blkUpdates.find(rScene.m_blkTypeIds.id_of("dust"));
-        it != blkUpdates.end())
+    if (auto it = typeChanges.find(rScene.m_blkTypeIds.id_of("dust"));
+        it != typeChanges.end())
     {
         for (size_t blockId : it->second.m_added)
         {
@@ -685,8 +744,8 @@ void update_chunk_various(
     }
 
     // Create redstone torch models
-    if (auto it = blkUpdates.find(rScene.m_blkTypeIds.id_of("torch"));
-        it != blkUpdates.end())
+    if (auto it = typeChanges.find(rScene.m_blkTypeIds.id_of("torch"));
+        it != typeChanges.end())
     {
         for (size_t blockId : it->second.m_added)
         {
@@ -694,30 +753,14 @@ void update_chunk_various(
             add_mesh_quick(rScene, Matrix4::translation(pos), rScene.m_meshs.at("Redstone/redstone:Torch"));
         }
     }
-
 }
 
-void set_sensitive(RedstoneScene& rScene, ChunkId chunk, BlkTypeId type, bool sensitive)
-{
-    ChkBlkTypeChanges_t &rTypeChanges = rScene.m_chunks.m_blkTypeChanges[size_t(chunk)];
-    if (auto it = rTypeChanges.find(type);
-        it != rTypeChanges.end())
-    {
-        for (size_t blkId : it->second.m_added)
-        {
-            rScene.m_chunks.m_blkSensitive[size_t(chunk)].at(blkId) = sensitive;
-        }
-    }
-}
 
 void update_chunks(
         RedstoneScene& rScene,
         ArrayView< std::pair<ChunkId, ChkBlkPlacements_t> > chunkUpd)
 {
     using namespace osp::active;
-
-    rScene.m_chunks.m_blkTypeChanges.resize(rScene.m_chunks.m_ids.capacity());
-    rScene.m_chunks.m_blkTypeConnect.resize(rScene.m_chunks.m_ids.capacity());
 
     for (auto const& [chunkId, blkChanges] : chunkUpd)
     {
@@ -729,14 +772,14 @@ void update_chunks(
             blkUpd.m_removed.reset();
         }
 
-        // Update all block IDs
+        // Update all block IDs and write type changes
         update_chunk_block_ids(
                 rScene.m_chunks.m_blkTypes[size_t(chunkId)],
                 rScene.m_chunks.m_blkTypeChanges[size_t(chunkId)],
                 blkChanges);
 
         // mark dusts as sensitive
-        set_sensitive(rScene, chunkId, rScene.m_blkTypeIds.id_of("dust"), true);
+        //set_sensitive(rScene, chunkId, rScene.m_blkTypeIds.id_of("dust"), true);
     }
 
 
@@ -746,20 +789,11 @@ void update_chunks(
         {
             std::array< std::vector< std::pair<BlkTypeId,ChkBlkId> >, 6 > sideTmp;
 
-            rScene.m_chunks.m_blkTypeConnect[size_t(chunkId)][blkTypeId].m_connect.resize(gc_chunkSize);
+            rScene.m_chunks.m_blkTypeConnect[size_t(chunkId)][blkTypeId].m_connect.reset();
 
-            try_update_chunk_connections(
-                    chkBlkChanges.m_added,
-                    rScene.m_chunks.m_blkTypes,
-                    rScene.m_chunks.m_blkSensitive,
-                    chunkId,
-                    blkTypeId,
-                    {osp::id_null<ChunkId>(), osp::id_null<ChunkId>(), osp::id_null<ChunkId>(), osp::id_null<ChunkId>(), osp::id_null<ChunkId>(), osp::id_null<ChunkId>()},
-                    rScene.m_chunks.m_blkTypeConnect,
-                    sideTmp);
         }
 
-        update_chunk_various(rScene, chunkId, rScene.m_chunks.m_blkTypeChanges[size_t(chunkId)]);
+        update_chunk_various(rScene, chunkId);
     }
 }
 

@@ -6,7 +6,7 @@
 #include <Corrade/Containers/ArrayViewStl.h>
 
 
-namespace redstonesim
+namespace testapp::redstone
 {
 
 using Corrade::Containers::ArrayView;

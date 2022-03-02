@@ -39,8 +39,8 @@ using Flat = Magnum::Shaders::FlatGL3D;
 struct ACtxDrawFlat
 {
 
-    DependRes<Flat> m_shaderUntextured;
-    DependRes<Flat> m_shaderDiffuse;
+    Flat m_shaderUntextured{Corrade::NoCreate};
+    Flat m_shaderDiffuse{Corrade::NoCreate};
 
     active::acomp_storage_t<active::ACompDrawTransform> *m_pDrawTf{nullptr};
     active::acomp_storage_t<active::ACompColor>         *m_pColor{nullptr};

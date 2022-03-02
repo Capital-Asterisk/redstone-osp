@@ -129,7 +129,6 @@ std::unordered_map<std::string_view, Option> const g_scenes
             RedstoneScene& rScene
                     = entt::any_cast<RedstoneScene&>(g_activeScene);
             rApp.set_on_draw(gen_draw(rScene, rApp));
-            load_gl_resources(*g_activeApplication);
         };
     }}},
     {"enginetest", {"Demonstrate basic game engine functionality", [] {

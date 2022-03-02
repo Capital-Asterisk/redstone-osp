@@ -89,12 +89,12 @@ void shader::assign_flat(
             if (diffuse.contains(ent))
             {
                 pStorageOpaque->emplace(
-                        ent, EntityToDraw{&draw_ent_flat, {&rData, &(*rData.m_shaderDiffuse)} });
+                        ent, EntityToDraw{&draw_ent_flat, {&rData, &rData.m_shaderDiffuse} });
             }
             else
             {
                 pStorageOpaque->emplace(
-                        ent, EntityToDraw{&draw_ent_flat, {&rData, &(*rData.m_shaderUntextured)} });
+                        ent, EntityToDraw{&draw_ent_flat, {&rData, &rData.m_shaderUntextured} });
             }
         }
         else
@@ -108,12 +108,12 @@ void shader::assign_flat(
             if (diffuse.contains(ent))
             {
                 pStorageTransparent->emplace(
-                        ent, EntityToDraw{&draw_ent_flat, {&rData, &(*rData.m_shaderDiffuse)} });
+                        ent, EntityToDraw{&draw_ent_flat, {&rData, &rData.m_shaderDiffuse} });
             }
             else
             {
                 pStorageTransparent->emplace(
-                        ent, EntityToDraw{&draw_ent_flat, {&rData, &(*rData.m_shaderUntextured)} });
+                        ent, EntityToDraw{&draw_ent_flat, {&rData, &rData.m_shaderUntextured} });
             }
 
         }

@@ -46,6 +46,13 @@ struct ACtxDrawFlat
     active::acomp_storage_t<active::ACompColor>         *m_pColor{nullptr};
     active::acomp_storage_t<active::ACompTextureGL>     *m_pDiffuseTexGl{nullptr};
     active::acomp_storage_t<active::ACompMeshGL>        *m_pMeshGl{nullptr};
+
+    constexpr void assign_pointers(active::ACtxRenderGL& rCtxRenderGl) noexcept
+    {
+        m_pDrawTf       = &rCtxRenderGl.m_drawTransform;
+        m_pDiffuseTexGl = &rCtxRenderGl.m_diffuseTexGl;
+        m_pMeshGl       = &rCtxRenderGl.m_meshGl;
+    }
 };
 
 void draw_ent_flat(

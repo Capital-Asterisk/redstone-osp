@@ -538,7 +538,6 @@ entt::any setup_scene(osp::Package &rPkg)
     // Create camera transform and draw transform
     ACompTransform &rCamTf = rScene.m_basic.m_transform.emplace(camEnt);
     rCamTf.m_transform.translation().z() = 25;
-    rScene.m_drawing.m_drawTransform.emplace(camEnt);
 
     // Create camera component
     ACompCamera &rCamComp = rScene.m_basic.m_camera.emplace(camEnt);
@@ -567,7 +566,6 @@ entt::any setup_scene(osp::Package &rPkg)
 
     // Add transform and draw transform
     rScene.m_basic.m_transform.emplace(rScene.m_cube, ACompTransform{ Matrix4::scaling(Vector3{0.5}) });
-    rScene.m_drawing.m_drawTransform.emplace(rScene.m_cube);
 
     // Make cube green
     rScene.m_drawing.m_color.emplace(rScene.m_cube, 0x67ff00ff_rgbaf);
@@ -601,7 +599,6 @@ entt::any setup_scene(osp::Package &rPkg)
     // Add transform, draw transform, opaque, and visible
     rScene.m_basic.m_transform.emplace(
             floorMesh, ACompTransform{Matrix4::translation({32.0f, 0.0f, 32.0f}) * Matrix4::rotationX(-90.0_degf) * Matrix4::scaling({32.0f, 32.0f, 0.0f})});
-    rScene.m_drawing.m_drawTransform.emplace(floorMesh);
     rScene.m_drawing.m_opaque.emplace(floorMesh);
     rScene.m_drawing.m_visible.emplace(floorMesh);
 
@@ -663,7 +660,6 @@ osp::active::ActiveEnt add_mesh_quick(RedstoneScene& rScene, Matrix4 const& tf, 
 
     // Add transform and draw transform
     rScene.m_basic.m_transform.emplace( ent, ACompTransform{tf} );
-    rScene.m_drawing.m_drawTransform.emplace(ent);
 
     // Add opaque and visible component
     rScene.m_drawing.m_opaque.emplace(ent);
@@ -750,7 +746,7 @@ void update_chunk_various(
         for (size_t blockId : it->second.m_added)
         {
             Vector3 const pos = Vector3(index_to_pos(blockId)) + Vector3{0.5, 0.5, 0.5};
-            add_mesh_quick(rScene, Matrix4::translation(pos), rScene.m_meshs.at("Redstone/redstone:Torch"));
+            ActiveEnt meshEnt = add_mesh_quick(rScene, Matrix4::translation(pos), rScene.m_meshs.at("Redstone/redstone:Torch"));
         }
     }
 }
@@ -807,7 +803,8 @@ void update_test_scene(RedstoneScene& rScene, float delta)
     using namespace osp::active;
 
 
-
+    // Sort hierarchy, required by renderer
+    SysHierarchy::sort(rScene.m_basic.m_hierarchy);
 }
 
 //-----------------------------------------------------------------------------
@@ -851,7 +848,7 @@ struct RedstoneRenderer
  * @param rRenderer [ref] Renderer data for test scene
  */
 void render_test_scene(
-        ActiveApplication& rApp, RedstoneScene& rScene,
+        ActiveApplication& rApp, RedstoneScene const& rScene,
         RedstoneRenderer& rRenderer)
 {
     using namespace osp::active;
@@ -881,7 +878,7 @@ void render_test_scene(
     // Assign Flat shader to entities with the gc_mat_flat material, and put
     // results into the fwd_opaque render group
     {
-        MaterialData &rMatFlat = rScene.m_drawing.m_materials[gc_mat_flat];
+        MaterialData const &rMatFlat = rScene.m_drawing.m_materials[gc_mat_flat];
         assign_flat(
                 rMatFlat.m_added,
                 &rGroupFwdOpaque.m_entities,
@@ -889,13 +886,17 @@ void render_test_scene(
                 rScene.m_drawing.m_opaque,
                 rRenderer.m_renderGl.m_diffuseTexGl,
                 rRenderer.m_flat);
-        rMatFlat.m_added.clear();
+        SysRender::assure_draw_transforms(
+                    rScene.m_basic.m_hierarchy,
+                    rRenderer.m_renderGl.m_drawTransform,
+                    std::cbegin(rMatFlat.m_added),
+                    std::cend(rMatFlat.m_added));
     }
 
     // Assign Phong shader to entities with the gc_mat_common material, and put
     // results into the fwd_opaque render group
     {
-        MaterialData &rMatCommon = rScene.m_drawing.m_materials[gc_mat_common];
+        MaterialData const &rMatCommon = rScene.m_drawing.m_materials[gc_mat_common];
         assign_phong(
                 rMatCommon.m_added,
                 &rGroupFwdOpaque.m_entities,
@@ -903,46 +904,56 @@ void render_test_scene(
                 rScene.m_drawing.m_opaque,
                 rRenderer.m_renderGl.m_diffuseTexGl,
                 rRenderer.m_phong);
-        rMatCommon.m_added.clear();
+        SysRender::assure_draw_transforms(
+                    rScene.m_basic.m_hierarchy,
+                    rRenderer.m_renderGl.m_drawTransform,
+                    std::cbegin(rMatCommon.m_added),
+                    std::cend(rMatCommon.m_added));
     }
 
     // Same thing but with MeshVisualizer and gc_mat_visualizer
     {
-        MaterialData &rMatVisualizer
+        MaterialData const &rMatVisualizer
                 = rScene.m_drawing.m_materials[gc_mat_visualizer];
         assign_visualizer(
                 rMatVisualizer.m_added,
                 rGroupFwdTransparent.m_entities,
                 rRenderer.m_visualizer);
-        rMatVisualizer.m_added.clear();
+        SysRender::assure_draw_transforms(
+                    rScene.m_basic.m_hierarchy,
+                    rRenderer.m_renderGl.m_drawTransform,
+                    std::cbegin(rMatVisualizer.m_added),
+                    std::cend(rMatVisualizer.m_added));
     }
 
     // Same thing but with MeshVisualizer and gc_mat_visualizer
     {
-        MaterialData &rMatWireframe
+        MaterialData const &rMatWireframe
                 = rScene.m_drawing.m_materials[gc_mat_wireframe];
         assign_visualizer(
                 rMatWireframe.m_added,
                 rGroupFwdTransparent.m_entities,
                 rRenderer.m_wireframe);
-        rMatWireframe.m_added.clear();
+        SysRender::assure_draw_transforms(
+                    rScene.m_basic.m_hierarchy,
+                    rRenderer.m_renderGl.m_drawTransform,
+                    std::cbegin(rMatWireframe.m_added),
+                    std::cend(rMatWireframe.m_added));
     }
 
     // Calculate hierarchy transforms
-    SysHierarchy::sort(rScene.m_basic.m_hierarchy);
     SysRender::update_draw_transforms(
             rScene.m_basic.m_hierarchy,
             rScene.m_basic.m_transform,
-            rScene.m_drawing.m_drawTransform);
+            rRenderer.m_renderGl.m_drawTransform);
 
     // Get camera, and calculate projection matrix and inverse transformation
-    ACompCamera &rCamera = rScene.m_basic.m_camera.get(rRenderer.m_camera);
+    ACompCamera const &rCamera = rScene.m_basic.m_camera.get(rRenderer.m_camera);
     ACompDrawTransform const &cameraDrawTf
-            = rScene.m_drawing.m_drawTransform.get(rRenderer.m_camera);
-    rCamera.m_viewport
-            = osp::Vector2(Magnum::GL::defaultFramebuffer.viewport().size());
-    rCamera.calculate_projection();
-    rCamera.m_inverse = cameraDrawTf.m_transformWorld.inverted();
+            = rRenderer.m_renderGl.m_drawTransform.get(rRenderer.m_camera);
+    ViewProjMatrix viewProj{
+            cameraDrawTf.m_transformWorld.inverted(),
+            rCamera.calculate_projection()};
 
     // Bind offscreen FBO
     Framebuffer &rFbo = *rGlResources.get<Framebuffer>("offscreen_fbo");
@@ -960,12 +971,12 @@ void render_test_scene(
 
     SysRenderGL::draw_group(
             rRenderer.m_renderGroups.m_groups.at("fwd_opaque"),
-            rScene.m_drawing.m_visible, rCamera);
+            rScene.m_drawing.m_visible, viewProj);
 
     // Forward Render fwd_transparent group to FBO
     SysRenderGL::render_transparent(
             rRenderer.m_renderGroups.m_groups.at("fwd_transparent"),
-            rScene.m_drawing.m_visible, rCamera);
+            rScene.m_drawing.m_visible, viewProj);
 
     // Display FBO
     Texture2D &rFboColor = *rGlResources.get<Texture2D>("offscreen_fbo_color");
@@ -1013,62 +1024,45 @@ on_draw_t gen_draw(RedstoneScene& rScene, ActiveApplication& rApp)
     using namespace osp::active;
     using namespace osp::shader;
 
+    osp::Package &rGlResources = rApp.get_gl_resources();
+
     // Create renderer data. This uses a shared_ptr to allow being stored
     // inside an std::function, which require copyable types
     std::shared_ptr<RedstoneRenderer> pRenderer
             = std::make_shared<RedstoneRenderer>(rApp);
 
-    osp::Package &rGlResources = rApp.get_gl_resources();
+    // Get or reserve shader resources. These are loaded in load_gl_resources,
+    // which can be called before or after this function
+    pRenderer->m_flat.m_shaderUntextured
+            = rGlResources.get_or_reserve<Flat>("notexture");
+    pRenderer->m_flat.m_shaderDiffuse
+            = rGlResources.get_or_reserve<Flat>("textured");
+    pRenderer->m_phong.m_shaderUntextured
+            = rGlResources.get_or_reserve<Phong>("notexture");
+    pRenderer->m_phong.m_shaderDiffuse
+            = rGlResources.get_or_reserve<Phong>("textured");
+    pRenderer->m_visualizer.m_shader
+            = rGlResources.get_or_reserve<MeshVisualizer>("mesh_vis_shader");
+    pRenderer->m_wireframe.m_shader
+            = rGlResources.get_or_reserve<MeshVisualizer>("mesh_vis_shader");
+    pRenderer->m_wireframe.m_wireframeOnly = true;
 
-    // Acquire data needed to draw Flat materials
-    {
-        ACtxDrawFlat &rFlat = pRenderer->m_flat;
-        rFlat.m_shaderUntextured
-                = rGlResources.get_or_reserve<Flat>("notexture");
-        rFlat.m_shaderDiffuse
-                = rGlResources.get_or_reserve<Flat>("textured");
-        rFlat.m_pDrawTf       = &rScene.m_drawing.m_drawTransform;
-        rFlat.m_pColor        = &rScene.m_drawing.m_color;
-        rFlat.m_pDiffuseTexGl = &pRenderer->m_renderGl.m_diffuseTexGl;
-        rFlat.m_pMeshGl       = &pRenderer->m_renderGl.m_meshGl;
-    }
-
-    // Acquire data needed to draw Phong materials
-    {
-        ACtxDrawPhong &rPhong = pRenderer->m_phong;
-        rPhong.m_shaderUntextured
-                = rGlResources.get_or_reserve<Phong>("notexture");
-        rPhong.m_shaderDiffuse
-                = rGlResources.get_or_reserve<Phong>("textured");
-        rPhong.m_pDrawTf       = &rScene.m_drawing.m_drawTransform;
-        rPhong.m_pColor        = &rScene.m_drawing.m_color;
-        rPhong.m_pDiffuseTexGl = &pRenderer->m_renderGl.m_diffuseTexGl;
-        rPhong.m_pMeshGl       = &pRenderer->m_renderGl.m_meshGl;
-    }
-
-    // Acquire data needed to draw MeshVisualizer materials
-    {
-        ACtxDrawMeshVisualizer &rVisualizer = pRenderer->m_visualizer;
-        rVisualizer.m_shader
-                = rGlResources.get_or_reserve<MeshVisualizer>("mesh_vis_shader");
-        rVisualizer.m_pDrawTf = &rScene.m_drawing.m_drawTransform;
-        rVisualizer.m_pMeshGl = &pRenderer->m_renderGl.m_meshGl;
-    }
-
-    // Acquire data needed to draw MeshVisualizer materials, but for wireframes
-    // only
-    {
-        ACtxDrawMeshVisualizer &rWireframe = pRenderer->m_wireframe;
-        pRenderer->m_wireframe.m_shader
-                = rGlResources.get_or_reserve<MeshVisualizer>("wireframe");
-        pRenderer->m_wireframe.m_pDrawTf = &rScene.m_drawing.m_drawTransform;
-        pRenderer->m_wireframe.m_pMeshGl = &pRenderer->m_renderGl.m_meshGl;
-        pRenderer->m_wireframe.m_wireframeOnly = true;
-
-    }
+    // Set component storage pointers, so that they can be accessed by shaders
+    pRenderer->m_flat.assign_pointers(pRenderer->m_renderGl);
+    pRenderer->m_flat.m_pColor = &rScene.m_drawing.m_color;
+    pRenderer->m_phong.assign_pointers(pRenderer->m_renderGl);
+    pRenderer->m_visualizer.assign_pointers(pRenderer->m_renderGl);
+    pRenderer->m_wireframe.assign_pointers(pRenderer->m_renderGl);
 
     // Select first camera for rendering
-    pRenderer->m_camera = rScene.m_basic.m_camera.at(0);
+    ActiveEnt const camEnt = rScene.m_basic.m_camera.at(0);
+    pRenderer->m_camera = camEnt;
+    rScene.m_basic.m_camera.get(camEnt).set_aspect_ratio(
+            osp::Vector2(Magnum::GL::defaultFramebuffer.viewport().size()));
+    SysRender::add_draw_transforms_recurse(
+            rScene.m_basic.m_hierarchy,
+            pRenderer->m_renderGl.m_drawTransform,
+            camEnt);
 
     pRenderer->m_camCtrl.m_target = osp::Vector3{};
     pRenderer->m_camCtrl.m_up = osp::Vector3{0.0f, 1.0f, 0.0f};
@@ -1160,6 +1154,10 @@ on_draw_t gen_draw(RedstoneScene& rScene, ActiveApplication& rApp)
 
         update_test_scene(rScene, delta);
         render_test_scene(rApp, rScene, *pRenderer);
+
+        SysRender::clear_dirty_materials(rScene.m_drawing.m_materials);
+        rScene.m_drawing.m_diffuseDirty.clear();
+        rScene.m_drawing.m_meshDirty.clear();
     };
 }
 

@@ -270,6 +270,9 @@ struct ChkBlkConnect
 
 using ChkBlkTypeConnect_t = std::unordered_map<BlkTypeId, ChkBlkConnect>;
 
+/**
+ * @brief Assigned to a block if another block is subscribed to it
+ */
 struct BlkSubscriber
 {
     ChunkId m_chunk;
@@ -304,15 +307,18 @@ struct ChkBlkSubscribers
 struct ACtxVxLoadedChunks
 {
     IdRegistry<ChunkId> m_ids;
+    HierBitset_t m_dirty;
     std::map< ChunkCoord_t, ChunkId > m_coordToChunk;
     std::vector<ChunkCoord_t> m_chunkToCoord;
 
+    // [ChunkId][ChkBlkId]
     std::vector< Array<BlkTypeId> > m_blkTypes;
     std::vector< Array<Magnum::BoolVector3> > m_blkDirection;
     //std::vector< std::vector<bool> > m_blkSensitive;
 
+    // [ChunkId][BlkTypeId].m_something[ChkBlkId]
     std::vector<ChkBlkTypeChanges_t> m_blkTypeChanges;
-    std::vector<ChkBlkTypeConnect_t> m_blkTypeConnect;
+    //std::vector<ChkBlkTypeConnect_t> m_blkTypeConnect;
 
     std::vector<ChkBlkSubscribers> m_blkSubscribers;
 };
@@ -336,7 +342,7 @@ struct ACtxVxRsDusts
 //-----------------------------------------------------------------------------
 
 
-void update_chunk_block_ids(
+void chunk_assign_block_ids(
         ArrayView<BlkTypeId> chkBlkTypeIds,
         ChkBlkTypeChanges_t& rBlkUpd,
         ChkBlkPlacements_t const& blkPlacements)
@@ -365,80 +371,6 @@ void update_chunk_block_ids(
             rCurrBlkTypeId = newBlkTypeId;
         }
     }
-}
-
-bool try_update_chunk_connections(
-        HierBitset_t const& added,
-        std::vector< Array<BlkTypeId> > const& blkTypes,
-        std::vector< std::vector<bool> > const& blkSensitive,
-        ChunkId ownChunk,
-        BlkTypeId ownType,
-        std::array<ChunkId, 6> sideChunks,
-        std::vector<ChkBlkTypeConnect_t>& rBlkConnect,
-        std::array< std::vector< std::pair<BlkTypeId,ChkBlkId> >, 6 >& rSideTmp)
-{
-    ChkBlkConnect &rConnect = rBlkConnect.at(size_t(ownChunk)).at(ownType);
-
-    if (rConnect.m_lock.test_and_set(std::memory_order_acquire))
-    {
-        return false;
-    }
-
-    std::vector<bool> const &ownSensitive = blkSensitive[size_t(ownChunk)];
-
-    // Loop through each block
-    for (size_t blkIdx : added)
-    {
-        // mark block itself as needing connection update
-        if (ownSensitive[blkIdx])
-        {
-            rConnect.m_connect.set(blkIdx);
-        }
-
-        // Loop through 6 neighbouring blocks
-        for (int i = 0; i < 6; i ++)
-        {
-            DiffBlk const diff
-                    = inter_chunk_pos(index_to_pos(blkIdx) + gc_sideToVec[i]);
-            ChkBlkId const sideBlkId = chunk_block_id(diff.m_pos);
-
-
-            if (diff.m_chunkDelta.isZero())
-            {
-                // Side block not on different chunk
-                if (ownSensitive[size_t(sideBlkId)])
-                {
-                    OSP_LOG_INFO("BESIDE 2!");
-                    rConnect.m_connect.set(size_t(sideBlkId));
-                }
-            }
-            else if (sideChunks[i] != lgrn::id_null<ChunkId>())
-            {
-                ESide const side = vec_to_side(diff.m_chunkDelta);
-                ChunkId const chkId = sideChunks.at(size_t(side));
-
-                if (blkSensitive.at(size_t(chkId)).at(size_t(sideBlkId)))
-                {
-                    BlkTypeId const sideType = blkTypes.at(size_t(chkId))[size_t(sideBlkId)];
-
-                    std::vector<std::pair<BlkTypeId,ChkBlkId>> &rSideLater
-                            = rSideTmp.at(size_t(side));
-
-                    auto it = std::find_if(
-                            std::begin(rSideLater), std::end(rSideLater),
-                            [sideType] (std::pair<BlkTypeId,ChkBlkId> const& pearLol)
-                    {
-                        return sideType == pearLol.first;
-                    });
-
-                    rSideLater.emplace(it, sideType, sideBlkId);
-                }
-            }
-        }
-    }
-
-    rConnect.m_lock.clear(std::memory_order_release);
-    return true;
 }
 
 
@@ -606,19 +538,21 @@ entt::any setup_scene(osp::Package &rPkg)
     SysHierarchy::add_child(
             rScene.m_basic.m_hierarchy, rScene.m_hierRoot, floorMesh);
 
-    // Create single chunk
-    rScene.m_singleChunk = rScene.m_chunks.m_ids.create();
-
-    // Allocate spaces for that single chunk
+    // Allocate spaces for a few chunks
+    rScene.m_chunks.m_ids.reserve(32);
     size_t const capacity = rScene.m_chunks.m_ids.capacity();
+    rScene.m_chunks.m_dirty.resize(capacity);
     rScene.m_chunks.m_blkTypeChanges.resize(capacity);
-    rScene.m_chunks.m_blkTypeConnect.resize(capacity);
+    //rScene.m_chunks.m_blkTypeConnect.resize(capacity);
     rScene.m_chunks.m_blkTypes.resize(capacity);
     rScene.m_chunkDusts.m_dusts.resize(capacity);
 
-    // Allocate buffers used by the chunk
-    rScene.m_chunks.m_blkTypeConnect[0][rScene.m_blkTypeIds.id_of("dust")]
-            .m_connect.resize(gc_chunkSize);
+    // Create single chunk
+    rScene.m_singleChunk = rScene.m_chunks.m_ids.create();
+
+    // Allocate buffers used by the single chunk
+    //rScene.m_chunks.m_blkTypeConnect[0][rScene.m_blkTypeIds.id_of("dust")]
+    //        .m_connect.resize(gc_chunkSize);
     rScene.m_chunkDusts.m_dusts[0]
             = Array<BlkRsDust>{Corrade::DirectInit, gc_chunkSize};
 
@@ -626,7 +560,6 @@ entt::any setup_scene(osp::Package &rPkg)
     rScene.m_chunks.m_blkTypes[0]
             = Array<BlkTypeId>{Corrade::DirectInit, gc_chunkSize,
                                  rScene.m_blkTypeIds.id_of("air")};
-    //rScene.m_chunks.m_blkSensitive[0].resize(gc_chunkSize, false);
 
     // Keep track of meshes
     for (std::string_view const str : gc_meshsUsed)
@@ -672,55 +605,13 @@ osp::active::ActiveEnt add_mesh_quick(RedstoneScene& rScene, Matrix4 const& tf, 
     return ent;
 }
 
-void update_chunk_various(
-        RedstoneScene& rScene, ChunkId chkId)
+void chunk_update_visuals(RedstoneScene& rScene, ChunkId chkId)
 {
     using namespace osp::active;
 
     ChkBlkTypeChanges_t const& typeChanges = rScene.m_chunks.m_blkTypeChanges[size_t(chkId)];
-    ChkBlkTypeConnect_t const& typeConnect = rScene.m_chunks.m_blkTypeConnect[size_t(chkId)];
 
     ACtxVxRsDusts::ChunkDust_t &rDusts = rScene.m_chunkDusts.m_dusts.at(size_t(chkId));
-
-    BlkTypeId const dustId = rScene.m_blkTypeIds.id_of("dust");
-
-    // System: Redstone Dust connector
-
-    if (auto it = typeConnect.find(dustId);
-        it != typeConnect.end())
-    {
-        HierBitset_t const& updDust = it->second.m_connect;
-
-        for (size_t blockId : updDust)
-        {
-            Vector3i const pos = index_to_pos(blockId);
-
-            BlkRsDust &rDust = rDusts[blockId];
-            rDust.m_connected = EMultiDir(0);
-            rDust.m_rises = EMultiDir(0);
-
-            constexpr std::array< std::pair<Vector3i, EMultiDir>, 4 > const c_sides
-            {{
-                { { 1,  0,  0}, EMultiDir::POS_X },
-                { {-1,  0,  0}, EMultiDir::NEG_X },
-                { { 0,  0,  1}, EMultiDir::POS_Z },
-                { { 0,  0, -1}, EMultiDir::NEG_Z }
-            }};
-
-            // Loop through surrounding 4 blocks
-            for (std::pair<Vector3i, EMultiDir> const& pair : c_sides)
-            {
-                DiffBlk const interpos = inter_chunk_pos(pos + pair.first);
-                ChkBlkId const sideBlkId = chunk_block_id(interpos.m_pos);
-
-                if (rScene.m_chunks.m_blkTypes[size_t(chkId)][size_t(sideBlkId)] == dustId)
-                {
-                    OSP_LOG_INFO("BESIDE!");
-                }
-            }
-        }
-    }
-
 
     // Create models
 
@@ -746,13 +637,12 @@ void update_chunk_various(
         for (size_t blockId : it->second.m_added)
         {
             Vector3 const pos = Vector3(index_to_pos(blockId)) + Vector3{0.5, 0.5, 0.5};
-            ActiveEnt meshEnt = add_mesh_quick(rScene, Matrix4::translation(pos), rScene.m_meshs.at("Redstone/redstone:Torch"));
+            add_mesh_quick(rScene, Matrix4::translation(pos), rScene.m_meshs.at("Redstone/redstone:Torch"));
         }
     }
 }
 
-
-void update_chunks(
+void world_update_block_ids(
         RedstoneScene& rScene,
         ArrayView< std::pair<ChunkId, ChkBlkPlacements_t> > chunkUpd)
 {
@@ -769,27 +659,21 @@ void update_chunks(
         }
 
         // Update all block IDs and write type changes
-        update_chunk_block_ids(
+        chunk_assign_block_ids(
                 rScene.m_chunks.m_blkTypes[size_t(chunkId)],
                 rScene.m_chunks.m_blkTypeChanges[size_t(chunkId)],
                 blkChanges);
 
-        // mark dusts as sensitive
-        //set_sensitive(rScene, chunkId, rScene.m_blkTypeIds.id_of("dust"), true);
+        // just set all chunks dirty for now lol
+        rScene.m_chunks.m_dirty.set(size_t(chunkId));
     }
+}
 
-
-    for (auto const& [chunkId, blkChanges] : chunkUpd)
+void world_update_visuals(RedstoneScene& rScene)
+{
+    for (std::size_t chunkId : rScene.m_chunks.m_dirty)
     {
-        for (auto & [blkTypeId, chkBlkChanges] : rScene.m_chunks.m_blkTypeChanges[size_t(chunkId)])
-        {
-            std::array< std::vector< std::pair<BlkTypeId,ChkBlkId> >, 6 > sideTmp;
-
-            rScene.m_chunks.m_blkTypeConnect[size_t(chunkId)][blkTypeId].m_connect.reset();
-
-        }
-
-        update_chunk_various(rScene, chunkId);
+        chunk_update_visuals(rScene, ChunkId(chunkId));
     }
 }
 
@@ -982,6 +866,42 @@ void render_test_scene(
     SysRenderGL::display_texture(rApp.get_render_gl(), rFboColor);
 }
 
+ChkBlkPlacements_t place_user_blocks(RedstoneScene &rScene, RedstoneRenderer& rRenderer)
+{
+    Magnum::Vector3i const tgt{rRenderer.m_camCtrl.m_target.value()};
+    Magnum::Matrix4 const &camTf = rScene.m_basic.m_transform.get(rRenderer.m_camera).m_transform;
+    Vector3 const lookDir = -camTf.backward();
+    ChkBlkPlacements_t blkPlacements;
+
+    for (osp::input::ButtonControlEvent const& event : rRenderer.m_controls.button_events())
+    {
+        using osp::input::EButtonControlEvent;
+
+        if (event.m_index == rRenderer.m_btnPlaceDust
+            && event.m_event == EButtonControlEvent::Triggered)
+        {
+            // Place dust
+            blkPlacements[rScene.m_blkTypeIds.id_of("dust")].push_back(
+                ChkBlkPlace{ tgt, lookDir }
+            );
+
+            OSP_LOG_INFO("Place Dust: ({}, {}, {})", tgt.x(), tgt.y(), tgt.z());
+        }
+
+        if (event.m_index == rRenderer.m_btnPlaceTorch
+            && event.m_event == EButtonControlEvent::Triggered)
+        {
+            // Place torch
+            blkPlacements[rScene.m_blkTypeIds.id_of("torch")].push_back(
+                ChkBlkPlace{ tgt, lookDir }
+            );
+
+            OSP_LOG_INFO("Place Torch: ({}, {}, {})", tgt.x(), tgt.y(), tgt.z());
+        }
+    }
+    return blkPlacements;
+}
+
 on_draw_t gen_draw(RedstoneScene& rScene, ActiveApplication& rApp)
 {
     using namespace osp::active;
@@ -1065,66 +985,54 @@ on_draw_t gen_draw(RedstoneScene& rScene, ActiveApplication& rApp)
 
         ACompTransform &rCamTf = rScene.m_basic.m_transform.get(pRenderer->m_camera);
 
+        // Move camera
         SysCameraController::update_view(pRenderer->m_camCtrl, rCamTf, delta);
         SysCameraController::update_move(
                 pRenderer->m_camCtrl, rCamTf, delta, true);
 
-
-        // Move cube to camera target
-        Magnum::Vector3i const target{pRenderer->m_camCtrl.m_target.value()};
+        // Move cursor cube to camera target
+        Magnum::Vector3i const tgt{pRenderer->m_camCtrl.m_target.value()};
         ACompTransform &rCubeTf = rScene.m_basic.m_transform.get(rScene.m_cube);
+        bool const targetValid = (tgt.x() >= 0 && tgt.y() >= 0 && tgt.z() >= 0);
+        rCubeTf.m_transform.translation()
+                = targetValid
+                ? Vector3{tgt} + Vector3{0.5f, 0.5f, 0.5f}
+                : Vector3{-2000};
 
-        if (   target.x() >= 0
-            && target.y() >= 0
-            && target.z() >= 0)
-        {
+        // Get blocks to place this frame
+        ChkBlkPlacements_t blkPlacements = place_user_blocks(rScene, *pRenderer);
 
-            rCubeTf.m_transform.translation() = Vector3(target) + Vector3{0.5f, 0.5f, 0.5f};
-        }
-        else
-        {
-            rCubeTf.m_transform.translation() = Vector3(-2000);
-        }
-
-
-        Vector3 const lookDir = -rCamTf.m_transform.backward();
-
-        ChkBlkPlacements_t blkPlacements;
-
-        for (osp::input::ButtonControlEvent const& event : pRenderer->m_controls.button_events())
-        {
-            using osp::input::EButtonControlEvent;
-
-            if (event.m_index == pRenderer->m_btnPlaceDust
-                && event.m_event == EButtonControlEvent::Triggered)
-            {
-                // Place dust
-                blkPlacements[rScene.m_blkTypeIds.id_of("dust")].push_back(
-                    ChkBlkPlace{ target, lookDir }
-                );
-
-                OSP_LOG_INFO("Place Dust: ({}, {}, {})", target.x(), target.y(), target.z());
-            }
-
-            if (event.m_index == pRenderer->m_btnPlaceTorch
-                && event.m_event == EButtonControlEvent::Triggered)
-            {
-                // Place torch
-                blkPlacements[rScene.m_blkTypeIds.id_of("torch")].push_back(
-                    ChkBlkPlace{ target, lookDir }
-                );
-
-                OSP_LOG_INFO("Place Torch: ({}, {}, {})", target.x(), target.y(), target.z());
-            }
-        }
-
+        // Accumolated list of block changes this frame, so far only 1
         std::array< std::pair<ChunkId, ChkBlkPlacements_t>, 1> changesArray
         {{
-            {rScene.m_singleChunk, blkPlacements}
+            {rScene.m_singleChunk, std::move(blkPlacements)}
         }};
-        update_chunks(rScene, changesArray);
+
+
+        // Update block IDs
+        // * Modifies each chunk's BlkTypeId buffers
+        // * Writes modified chunks
+        world_update_block_ids(rScene, changesArray);
+
+        // Accumolate subscription changes
+        // subscription changes are put in vector of [vector3i chunk coordinates]{mysubscriber, subscribeto}
+        // also keeps a list of chunks to reserve subscription data for
+        std::vector<ChunkCoord_t> needPreload;
+
+        // allocate chunks allowed to subscribe to not-yet-loaded chunks
+
+        // every chunk has a std::array<subscriptions, 26>
+        // for each block changed:
+        // how to send to a different chunk?
+
+        // Apply subscription changes
+
+        // # Update models
+        // * Syncs voxel data with OSP entities
+        world_update_visuals(rScene);
 
         update_test_scene(rScene, delta);
+
         render_test_scene(rApp, rScene, *pRenderer);
 
         SysRender::clear_dirty_materials(rScene.m_drawing.m_materials);

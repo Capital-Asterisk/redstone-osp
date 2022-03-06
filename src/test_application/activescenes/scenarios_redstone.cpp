@@ -86,6 +86,100 @@ using HierBitset_t = lgrn::HierarchicalBitset<uint64_t>;
 namespace testapp::redstone
 {
 
+// probably better to generalize this into parallel vectors
+template <typename KEY_T, typename VALUE_T>
+class SmallMap
+{
+    using VecKey_t = std::vector<KEY_T>;
+    using VecValue_t = std::vector<VALUE_T>;
+public:
+
+    VALUE_T operator[](KEY_T const& key)
+    {
+        std::size_t idx = find(key);
+        if (idx == m_keys.size())
+        {
+            m_keys.emplace_back(key);
+            return m_values.emplace_back();
+        }
+        return m_values[idx];
+    }
+
+    std::size_t find_assure(KEY_T const& key)
+    {
+        std::size_t idx = find(key);
+        if (idx == m_keys.size())
+        {
+            m_keys.emplace_back(key);
+            m_values.emplace_back();
+        }
+        return idx;
+    }
+
+    std::size_t find(KEY_T const& key) const
+    {
+        return std::distance(m_keys.begin(), std::find_if(m_keys.begin(), m_keys.end(), [&key] (KEY_T const& lhs) { return lhs == key; } ));
+    }
+
+    void reserve(std::size_t n)
+    {
+        m_keys.reserve(n);
+        m_values.reserve(n);
+    }
+
+    std::size_t size() const { return m_keys.size(); }
+    KEY_T& key(std::size_t i) noexcept { return m_keys[i]; }
+    VALUE_T& value(std::size_t i) noexcept { return m_values[i]; }
+    KEY_T const& key(std::size_t i) const noexcept { return m_keys[i]; }
+    VALUE_T const& value(std::size_t i) const noexcept { return m_values[i]; }
+
+private:
+    VecKey_t m_keys;
+    VecValue_t m_values;
+};
+
+template <typename CMP_T, typename FUNC_T, typename PAIR_IT_T>
+void funnel_each(PAIR_IT_T first, PAIR_IT_T last, CMP_T&& cmp, FUNC_T&& func) noexcept
+{
+    if (first == last)
+    {
+        return;
+    }
+
+    // initially sort first..last
+    std::sort(first, last, cmp);
+
+    while (true)
+    {
+        if (first->first != first->second) [[likely]]
+        {
+            // still has value
+
+            func(first->first);
+            ++(first->first);
+
+            // swap towards end until first..last is sorted
+            PAIR_IT_T lhs = first;
+            PAIR_IT_T rhs = std::next(first);
+            while (rhs != last && !cmp(*lhs, *rhs))
+            {
+                std::iter_swap(lhs, rhs);
+                ++lhs;
+                ++rhs;
+            }
+        }
+        else [[unlikely]]
+        {
+            // this pair is done iterating, forget about it
+            ++first;
+            if (first == last)
+            {
+                break;
+            }
+        }
+    }
+}
+
 //-----------------------------------------------------------------------------
 
 /* Types and fundementals */
@@ -151,11 +245,11 @@ struct ChkBlkChanges
     HierBitset_t m_removed;
 };
 
-using ChkBlkTypeChanges_t = std::unordered_map< BlkTypeId, ChkBlkChanges >;
+using TmpChkBlkTypeUpd_t = std::unordered_map< BlkTypeId, ChkBlkChanges >;
 
-ChkBlkChanges& assure_chunk_update(ChkBlkTypeChanges_t &rBlkUpd, BlkTypeId blkTypeId)
+ChkBlkChanges& assure_chunk_update(TmpChkBlkTypeUpd_t &rBlkTypeUpd, BlkTypeId blkTypeId)
 {
-    auto const& [it, success] = rBlkUpd.try_emplace(blkTypeId);
+    auto const& [it, success] = rBlkTypeUpd.try_emplace(blkTypeId);
     ChkBlkChanges &rChkUpd = it->second;
 
     if (success)
@@ -271,33 +365,64 @@ struct ChkBlkConnect
 using ChkBlkTypeConnect_t = std::unordered_map<BlkTypeId, ChkBlkConnect>;
 
 /**
+ * @brief Updates publishers of a chunk
+ */
+struct TmpChkUpdPublish
+{
+    struct PublishTo
+    {
+        ChkBlkId m_pubBlk;
+        ChkBlkId m_subBlk;
+        ChunkId m_subChunk;
+    };
+
+    using Vec_t = std::vector<PublishTo>;
+
+    //Vector3i m_publisherCoords;
+    Vec_t m_changes;
+};
+
+using TmpUpdPublish_t = SmallMap<Vector3i, TmpChkUpdPublish>;
+
+struct TmpChkUpdSubscribe
+{
+    struct SubscribeToItn
+    {
+        ChkBlkId m_subBlk;
+        ChkBlkId m_pubBlk;
+    };
+
+    struct SubscribeToExt
+    {
+        ChkBlkId m_subBlk;
+        ChkBlkId m_pubBlk;
+        ChunkId m_pubChunk;
+    };
+
+    using VecItn_t = std::vector<SubscribeToItn>;
+    using VecExt_t = std::vector<SubscribeToExt>;
+
+    //Vector3i m_publisherCoords;
+    VecItn_t m_changesItn;
+    VecExt_t m_changesExt;
+};
+
+using TmpUpdSubscribe_t = std::vector<TmpChkUpdSubscribe>;
+
+
+/**
  * @brief Assigned to a block if another block is subscribed to it
  */
-struct BlkSubscriber
+struct BlkConnect
 {
     ChunkId m_chunk;
     ChkBlkId m_block;
 };
 
-constexpr int const gc_subscribersPerChunk = 4;
-
-using ChkSubscriberId_t = int;
-
-struct ChkBlkSubscriberDiv
+struct ChkConnect
 {
-    std::atomic_flag m_lock = ATOMIC_FLAG_INIT;
-    lgrn::IntArrayMultiMap<ChkSubscriberId_t, BlkSubscriber> m_blk;
-};
-
-struct ChkBlkSubscribers
-{
-    std::array<ChkBlkSubscriberDiv, gc_subscribersPerChunk> m_subscribers;
-
-    std::pair<ChkSubscriberId_t, int> chkblkid_to_subscriber_div(ChkBlkId id)
-    {
-        return { uint32_t(id) / gc_subscribersPerChunk,
-                 uint32_t(id) % gc_subscribersPerChunk };
-    }
+    lgrn::IntArrayMultiMap<ChkBlkId, BlkConnect> m_blkPublish;
+    lgrn::IntArrayMultiMap<ChkBlkId, BlkConnect> m_blkSubscribe;
 };
 
 //-----------------------------------------------------------------------------
@@ -317,10 +442,10 @@ struct ACtxVxLoadedChunks
     //std::vector< std::vector<bool> > m_blkSensitive;
 
     // [ChunkId][BlkTypeId].m_something[ChkBlkId]
-    std::vector<ChkBlkTypeChanges_t> m_blkTypeChanges;
+    //std::vector<TmpChkBlkTypeUpd_t> m_blkTypeChanges;
     //std::vector<ChkBlkTypeConnect_t> m_blkTypeConnect;
 
-    std::vector<ChkBlkSubscribers> m_blkSubscribers;
+    //std::vector<ChkBlkSubscribers> m_blkSubscribers;
 };
 
 //-----------------------------------------------------------------------------
@@ -339,12 +464,52 @@ struct ACtxVxRsDusts
     std::vector<ChunkDust_t> m_dusts;
 };
 
+void chunk_connect_dusts(ChkBlkChanges const& dustBlkUpd, ChunkId chunkId, Vector3i chunkPos, TmpUpdPublish_t& rUpdPublish, TmpChkUpdSubscribe& rUpdChkSubscribe)
+{
+    using PublishTo         = TmpChkUpdPublish::PublishTo;
+    using SubscribeToItn    = TmpChkUpdSubscribe::SubscribeToItn;
+    using SubscribeToExt    = TmpChkUpdSubscribe::SubscribeToExt;
+
+    std::array<Vector3i, 12> sc_subToOffsets
+    {{
+       { 1, -1,  0}, { 1,  0,  0}, { 1,  1,  0},
+       {-1, -1,  0}, {-1,  0,  0}, {-1,  1,  0},
+       { 0, -1,  1}, { 0,  0,  1}, { 0,  1,  1},
+       { 0, -1, -1}, { 0,  0, -1}, { 0,  1, -1}
+    }};
+
+    std::size_t const ownChunkPubIdx = rUpdPublish.find_assure(chunkPos);
+
+    for (std::size_t subBlkId : dustBlkUpd.m_added)
+    {
+        Vector3i const subBlkPos = index_to_pos(subBlkId);
+        for (Vector3i const offset : sc_subToOffsets)
+        {
+            DiffBlk const diff = inter_chunk_pos(subBlkPos + offset);
+            ChkBlkId const pubBlkId = chunk_block_id(diff.m_pos);
+            PublishTo const pub{pubBlkId, ChkBlkId(subBlkId), chunkId};
+            if (diff.m_chunkDelta.isZero())
+            {
+                // subscribe to own chunk (common case)
+                rUpdPublish.value(ownChunkPubIdx).m_changes.emplace_back(pub);
+                rUpdChkSubscribe.m_changesItn.emplace_back(SubscribeToItn{ChkBlkId(subBlkId), pubBlkId});
+            }
+            else
+            {
+                // subscribe to neighbouring chunk
+                Vector3i const neighbourPos = chunkPos + diff.m_chunkDelta;
+                rUpdPublish[neighbourPos].m_changes.emplace_back(pub);
+            }
+        }
+    }
+}
+
 //-----------------------------------------------------------------------------
 
 
 void chunk_assign_block_ids(
         ArrayView<BlkTypeId> chkBlkTypeIds,
-        ChkBlkTypeChanges_t& rBlkUpd,
+        TmpChkBlkTypeUpd_t& rBlkTypeUpd,
         ChkBlkPlacements_t const& blkPlacements)
 {
     // Update Block IDs
@@ -363,9 +528,9 @@ void chunk_assign_block_ids(
             BlkTypeId &rCurrBlkTypeId = chkBlkTypeIds[size_t(block)];
 
             // Block type that was currently there got removed
-            assure_chunk_update(rBlkUpd, rCurrBlkTypeId).m_removed.set(size_t(block));
+            assure_chunk_update(rBlkTypeUpd, rCurrBlkTypeId).m_removed.set(size_t(block));
             // New block type got added
-            assure_chunk_update(rBlkUpd, newBlkTypeId).m_added.set(size_t(block));
+            assure_chunk_update(rBlkTypeUpd, newBlkTypeId).m_added.set(size_t(block));
 
             // assign new block type
             rCurrBlkTypeId = newBlkTypeId;
@@ -417,6 +582,8 @@ auto const gc_meshsUsed = std::array{
     "Redstone/redstone:LeverLit"
 };
 
+osp::IdSet<std::string_view, BlkTypeId> g_blkTypeIds;
+
 /**
  * @brief State of the entire engine test scene
  */
@@ -435,8 +602,6 @@ struct RedstoneScene
     // Crosshair
     osp::active::ActiveEnt          m_cube;
 
-    osp::IdSet<std::string_view, BlkTypeId> m_blkTypeIds;
-
     ACtxVxLoadedChunks m_chunks;
 
 
@@ -447,6 +612,8 @@ struct RedstoneScene
     osp::DependRes<ImageData2D> m_blockTexture;
     std::unordered_map< std::string_view, osp::DependRes<MeshData> > m_meshs;
 
+    // temporary states
+    std::vector<TmpChkBlkTypeUpd_t> m_blkTypeUpdates;
 };
 
 entt::any setup_scene(osp::Package &rPkg)
@@ -542,13 +709,14 @@ entt::any setup_scene(osp::Package &rPkg)
     rScene.m_chunks.m_ids.reserve(32);
     size_t const capacity = rScene.m_chunks.m_ids.capacity();
     rScene.m_chunks.m_dirty.resize(capacity);
-    rScene.m_chunks.m_blkTypeChanges.resize(capacity);
+    rScene.m_blkTypeUpdates.resize(capacity);
     //rScene.m_chunks.m_blkTypeConnect.resize(capacity);
     rScene.m_chunks.m_blkTypes.resize(capacity);
     rScene.m_chunkDusts.m_dusts.resize(capacity);
 
     // Create single chunk
     rScene.m_singleChunk = rScene.m_chunks.m_ids.create();
+    rScene.m_chunks.m_coordToChunk.emplace(ChunkCoord_t{0, 0, 0}, rScene.m_singleChunk);
 
     // Allocate buffers used by the single chunk
     //rScene.m_chunks.m_blkTypeConnect[0][rScene.m_blkTypeIds.id_of("dust")]
@@ -559,7 +727,7 @@ entt::any setup_scene(osp::Package &rPkg)
     // Fill single chunk with air
     rScene.m_chunks.m_blkTypes[0]
             = Array<BlkTypeId>{Corrade::DirectInit, gc_chunkSize,
-                                 rScene.m_blkTypeIds.id_of("air")};
+                                 g_blkTypeIds.id_of("air")};
 
     // Keep track of meshes
     for (std::string_view const str : gc_meshsUsed)
@@ -609,7 +777,7 @@ void chunk_update_visuals(RedstoneScene& rScene, ChunkId chkId)
 {
     using namespace osp::active;
 
-    ChkBlkTypeChanges_t const& typeChanges = rScene.m_chunks.m_blkTypeChanges[size_t(chkId)];
+    TmpChkBlkTypeUpd_t const& blkTypeUpd = rScene.m_blkTypeUpdates[size_t(chkId)];
 
     ACtxVxRsDusts::ChunkDust_t &rDusts = rScene.m_chunkDusts.m_dusts.at(size_t(chkId));
 
@@ -618,8 +786,8 @@ void chunk_update_visuals(RedstoneScene& rScene, ChunkId chkId)
     Vector3 chunkOffset{0}; // TODO
 
     // Create redstone dust models
-    if (auto it = typeChanges.find(rScene.m_blkTypeIds.id_of("dust"));
-        it != typeChanges.end())
+    if (auto it = blkTypeUpd.find(g_blkTypeIds.id_of("dust"));
+        it != blkTypeUpd.end())
     {
         for (size_t blockId : it->second.m_added)
         {
@@ -631,8 +799,8 @@ void chunk_update_visuals(RedstoneScene& rScene, ChunkId chkId)
     }
 
     // Create redstone torch models
-    if (auto it = typeChanges.find(rScene.m_blkTypeIds.id_of("torch"));
-        it != typeChanges.end())
+    if (auto it = blkTypeUpd.find(g_blkTypeIds.id_of("torch"));
+        it != blkTypeUpd.end())
     {
         for (size_t blockId : it->second.m_added)
         {
@@ -648,21 +816,21 @@ void world_update_block_ids(
 {
     using namespace osp::active;
 
-    for (auto const& [chunkId, blkChanges] : chunkUpd)
+    for (auto const& [chunkId, blkPlace] : chunkUpd)
     {
         // Clear block added and removed queues
-        for (auto & [blkTypeId, blkUpd]
-             : rScene.m_chunks.m_blkTypeChanges[size_t(chunkId)])
+        for (auto & [blkTypeId, blkTypeUpd]
+             : rScene.m_blkTypeUpdates[size_t(chunkId)])
         {
-            blkUpd.m_added.reset();
-            blkUpd.m_removed.reset();
+            blkTypeUpd.m_added.reset();
+            blkTypeUpd.m_removed.reset();
         }
 
         // Update all block IDs and write type changes
         chunk_assign_block_ids(
                 rScene.m_chunks.m_blkTypes[size_t(chunkId)],
-                rScene.m_chunks.m_blkTypeChanges[size_t(chunkId)],
-                blkChanges);
+                rScene.m_blkTypeUpdates[size_t(chunkId)],
+                blkPlace);
 
         // just set all chunks dirty for now lol
         rScene.m_chunks.m_dirty.set(size_t(chunkId));
@@ -881,7 +1049,7 @@ ChkBlkPlacements_t place_user_blocks(RedstoneScene &rScene, RedstoneRenderer& rR
             && event.m_event == EButtonControlEvent::Triggered)
         {
             // Place dust
-            blkPlacements[rScene.m_blkTypeIds.id_of("dust")].push_back(
+            blkPlacements[g_blkTypeIds.id_of("dust")].push_back(
                 ChkBlkPlace{ tgt, lookDir }
             );
 
@@ -892,7 +1060,7 @@ ChkBlkPlacements_t place_user_blocks(RedstoneScene &rScene, RedstoneRenderer& rR
             && event.m_event == EButtonControlEvent::Triggered)
         {
             // Place torch
-            blkPlacements[rScene.m_blkTypeIds.id_of("torch")].push_back(
+            blkPlacements[g_blkTypeIds.id_of("torch")].push_back(
                 ChkBlkPlace{ tgt, lookDir }
             );
 
@@ -1015,21 +1183,64 @@ on_draw_t gen_draw(RedstoneScene& rScene, ActiveApplication& rApp)
         world_update_block_ids(rScene, changesArray);
 
         // Accumolate subscription changes
-        // subscription changes are put in vector of [vector3i chunk coordinates]{mysubscriber, subscribeto}
-        // also keeps a list of chunks to reserve subscription data for
-        std::vector<ChunkCoord_t> needPreload;
+        TmpUpdPublish_t updPub;
+        TmpUpdSubscribe_t updSub(rScene.m_chunks.m_ids.capacity());
+        for (std::size_t chunkId : rScene.m_chunks.m_dirty)
+        {
+            TmpChkBlkTypeUpd_t const& blkTypeUpd = rScene.m_blkTypeUpdates[chunkId];
+            if (auto it = blkTypeUpd.find(g_blkTypeIds.id_of("dust"));
+                it != blkTypeUpd.end())
+            {
+                chunk_connect_dusts(it->second, ChunkId(chunkId), index_to_pos(chunkId), updPub, updSub[chunkId]);
+            }
+        }
 
-        // allocate chunks allowed to subscribe to not-yet-loaded chunks
+        // TODO: allocate chunks allowed to subscribe to not-yet-loaded chunks
 
-        // every chunk has a std::array<subscriptions, 26>
-        // for each block changed:
-        // how to send to a different chunk?
+        // Apply publish changes
+        // 1 element for each chunk changed
+        for (std::size_t i = 0; i < updPub.size(); ++i)
+        {
+            Vector3i const pos = updPub.key(i);
+            TmpChkUpdPublish &rChkUpdConnect = updPub.value(i);
+            auto found = rScene.m_chunks.m_coordToChunk.find(ChunkCoord_t{pos.x(), pos.y(), pos.z()});
 
-        // Apply subscription changes
+            if (found == rScene.m_chunks.m_coordToChunk.end())
+            {
+                continue; // just skip non existent chunks for now
+            }
+
+            using PublishTo = TmpChkUpdPublish::PublishTo;
+            std::sort(rChkUpdConnect.m_changes.begin(), rChkUpdConnect.m_changes.end(),
+                      [] (PublishTo const& lhs, PublishTo const& rhs)
+            {
+                return lhs.m_pubBlk < rhs.m_pubBlk;
+            });
+
+            // Intention is to have a thread for each chunk do this.
+            // Multiple TmpChkUpdPublish can be passed to this thread and
+            // iterated all at once
+            using it_t = TmpChkUpdPublish::Vec_t::iterator;
+            using pair_t = std::pair<it_t, it_t>;
+            auto its = std::array{pair_t(rChkUpdConnect.m_changes.begin(), rChkUpdConnect.m_changes.end())};
+            funnel_each(its.begin(), its.end(),
+                        [] (pair_t const& lhs, pair_t const& rhs) -> bool
+            {
+                return lhs.first->m_pubBlk < rhs.first->m_pubBlk;
+            },
+                        [] (it_t pubIt)
+            {
+                OSP_LOG_INFO("thing {}", pubIt->m_pubBlk);
+            });
+        }
 
         // # Update models
         // * Syncs voxel data with OSP entities
         world_update_visuals(rScene);
+
+
+        // clear block changes
+        rScene.m_blkTypeUpdates.clear();
 
         update_test_scene(rScene, delta);
 

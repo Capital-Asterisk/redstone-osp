@@ -61,6 +61,7 @@
 #include <tuple>
 #include <unordered_map>
 
+
 using Magnum::Trade::MeshData;
 using Magnum::Trade::ImageData2D;
 
@@ -421,8 +422,10 @@ struct BlkConnect
 
 struct ChkConnect
 {
-    lgrn::IntArrayMultiMap<ChkBlkId, BlkConnect> m_blkPublish;
-    lgrn::IntArrayMultiMap<ChkBlkId, BlkConnect> m_blkSubscribe;
+    using MultiMap_t = lgrn::IntArrayMultiMap<uint32_t, BlkConnect>;
+
+    MultiMap_t m_blkPublish;
+    MultiMap_t m_blkSubscribe;
 };
 
 //-----------------------------------------------------------------------------
@@ -439,6 +442,8 @@ struct ACtxVxLoadedChunks
     // [ChunkId][ChkBlkId]
     std::vector< Array<BlkTypeId> > m_blkTypes;
     std::vector< Array<Magnum::BoolVector3> > m_blkDirection;
+
+    std::vector<ChkConnect> m_connect;
     //std::vector< std::vector<bool> > m_blkSensitive;
 
     // [ChunkId][BlkTypeId].m_something[ChkBlkId]
@@ -466,6 +471,11 @@ struct ACtxVxRsDusts
 
 void chunk_connect_dusts(ChkBlkChanges const& dustBlkUpd, ChunkId chunkId, Vector3i chunkPos, TmpUpdPublish_t& rUpdPublish, TmpChkUpdSubscribe& rUpdChkSubscribe)
 {
+    if (dustBlkUpd.m_added.count() == 0)
+    {
+        return;
+    }
+
     using PublishTo         = TmpChkUpdPublish::PublishTo;
     using SubscribeToItn    = TmpChkUpdSubscribe::SubscribeToItn;
     using SubscribeToExt    = TmpChkUpdSubscribe::SubscribeToExt;
@@ -713,10 +723,12 @@ entt::any setup_scene(osp::Package &rPkg)
     //rScene.m_chunks.m_blkTypeConnect.resize(capacity);
     rScene.m_chunks.m_blkTypes.resize(capacity);
     rScene.m_chunkDusts.m_dusts.resize(capacity);
+    rScene.m_chunks.m_connect.resize(capacity);
 
     // Create single chunk
     rScene.m_singleChunk = rScene.m_chunks.m_ids.create();
     rScene.m_chunks.m_coordToChunk.emplace(ChunkCoord_t{0, 0, 0}, rScene.m_singleChunk);
+    rScene.m_chunks.m_connect.at(0).m_blkPublish.ids_reserve(gc_chunkSize);
 
     // Allocate buffers used by the single chunk
     //rScene.m_chunks.m_blkTypeConnect[0][rScene.m_blkTypeIds.id_of("dust")]
@@ -1070,10 +1082,12 @@ ChkBlkPlacements_t place_user_blocks(RedstoneScene &rScene, RedstoneRenderer& rR
     return blkPlacements;
 }
 
+
 on_draw_t gen_draw(RedstoneScene& rScene, ActiveApplication& rApp)
 {
     using namespace osp::active;
     using namespace osp::shader;
+
 
     // Create renderer data. This uses a shared_ptr to allow being stored
     // inside an std::function, which require copyable types
@@ -1217,21 +1231,81 @@ on_draw_t gen_draw(RedstoneScene& rScene, ActiveApplication& rApp)
                 return lhs.m_pubBlk < rhs.m_pubBlk;
             });
 
+            ChkConnect::MultiMap_t &rBlkPublish = rScene.m_chunks.m_connect.at(std::size_t(found->second)).m_blkPublish;
+
             // Intention is to have a thread for each chunk do this.
             // Multiple TmpChkUpdPublish can be passed to this thread and
             // iterated all at once
             using it_t = TmpChkUpdPublish::Vec_t::iterator;
             using pair_t = std::pair<it_t, it_t>;
-            auto its = std::array{pair_t(rChkUpdConnect.m_changes.begin(), rChkUpdConnect.m_changes.end())};
+            auto its = std::array
+            {
+                    pair_t(rChkUpdConnect.m_changes.begin(),
+                           rChkUpdConnect.m_changes.end())
+            };
+            std::size_t const totalChanges = rChkUpdConnect.m_changes.size();
+
+            if (std::size_t const sizeReq
+                    = lgrn::div_ceil(rBlkPublish.data_size() + totalChanges, gc_chunkSize) * gc_chunkSize;
+                rBlkPublish.data_capacity() < sizeReq)
+            {
+                rBlkPublish.data_reserve(sizeReq);
+            }
+
+            std::vector<BlkConnect> tmpConnect;
+            ChkBlkId currBlk = lgrn::id_null<ChkBlkId>();
+
+            auto flush = [&tmpConnect, &currBlk, &rBlkPublish] () -> void
+            {
+                if (tmpConnect.empty()) [[unlikely]]
+                {
+                    return;
+                }
+
+                uint32_t const currBlkI = uint32_t(currBlk);
+
+                if (rBlkPublish.contains(currBlkI))
+                {
+                    // erase existing subscribers
+                    auto span = rBlkPublish[currBlkI];
+                    tmpConnect.insert(tmpConnect.end(), span.begin(), span.end());
+                    rBlkPublish.erase(currBlkI);
+                }
+
+                rBlkPublish.emplace(currBlkI, tmpConnect.begin(), tmpConnect.end());
+
+                OSP_LOG_TRACE("Block {} publishes to:", currBlk);
+
+                for (auto const fish : tmpConnect)
+                {
+                    OSP_LOG_TRACE("* {}", fish.m_block);
+                }
+                tmpConnect.clear();
+
+            };
+
             funnel_each(its.begin(), its.end(),
                         [] (pair_t const& lhs, pair_t const& rhs) -> bool
             {
                 return lhs.first->m_pubBlk < rhs.first->m_pubBlk;
             },
-                        [] (it_t pubIt)
+                        [&tmpConnect, &currBlk, flush] (it_t pubIt)
             {
-                OSP_LOG_INFO("thing {}", pubIt->m_pubBlk);
+                if (currBlk != pubIt->m_pubBlk)
+                {
+                    flush();
+                    currBlk = pubIt->m_pubBlk;
+                }
+
+                if (currBlk == pubIt->m_pubBlk)
+                {
+                    tmpConnect.emplace_back(BlkConnect{pubIt->m_subChunk, pubIt->m_subBlk});
+                }
             });
+
+            flush();
+
+            rBlkPublish.pack();
         }
 
         // # Update models

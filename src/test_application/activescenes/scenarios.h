@@ -126,13 +126,13 @@ on_draw_t generate_draw_func(PhysicsTestScene& rScene, ActiveApplication& rApp);
 namespace redstone
 {
 
-struct RedstoneScene;
+struct RedstoneTestScene;
 
 entt::any setup_scene(osp::Package &rPkg);
 
 void load_gl_resources(ActiveApplication& rApp);
 
-on_draw_t gen_draw(RedstoneScene& rScene, ActiveApplication& rApp);
+on_draw_t gen_draw(RedstoneTestScene& rScene, ActiveApplication& rApp);
 
 } // namespace enginetest
 

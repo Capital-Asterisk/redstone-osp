@@ -126,8 +126,8 @@ std::unordered_map<std::string_view, Option> const g_scenes
 
         g_appSetup = [] (ActiveApplication& rApp)
         {
-            RedstoneScene& rScene
-                    = entt::any_cast<RedstoneScene&>(g_activeScene);
+            RedstoneTestScene& rScene
+                    = entt::any_cast<RedstoneTestScene&>(g_activeScene);
             rApp.set_on_draw(gen_draw(rScene, rApp));
         };
     }}},

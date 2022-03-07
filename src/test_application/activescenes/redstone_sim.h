@@ -1,6 +1,8 @@
 #pragma once
 
-#include <osp/id_registry.h>
+#include <longeron/id_management/registry.hpp>
+#include <longeron/id_management/unique_registry.hpp>
+#include <longeron/id_management/refcount.hpp>
 #include <entt/entity/storage.hpp>
 
 #include <Corrade/Containers/ArrayViewStl.h>
@@ -10,14 +12,14 @@ namespace testapp::redstone
 {
 
 using Corrade::Containers::ArrayView;
-using HierBitset_t = osp::HierarchicalBitset<uint64_t>;
+using HierBitset_t = lgrn::HierarchicalBitset<uint64_t>;
 
 enum class RsNodeId : uint32_t { };
 enum class RsElemId : uint32_t { };
 enum class RsElemLocalId : uint32_t { };
 enum class RsElemTypeId : uint8_t { };
 
-using RsNodeRefCount_t = osp::IdRefCount<RsNodeId>;
+using RsNodeRefCount_t = lgrn::IdRefCount<RsNodeId>;
 using RsNodeSto_t = RsNodeRefCount_t::Storage_t;
 
 template<typename T>
@@ -46,10 +48,11 @@ struct RsDust
     //uint8_t m_connectionCount;
 };
 
-size_t advance_multiple_max(ArrayView<HierBitset_t::Iterator> iterators) noexcept
+template<typename IT_T>
+size_t advance_multiple_max(ArrayView<IT_T> iterators) noexcept
 {
     // Select largest iterator in localUpd, store in pMax
-    HierBitset_t::Iterator *pMaxIt = &iterators[0];
+    IT_T *pMaxIt = &iterators[0];
     size_t value = **pMaxIt;
 
     for (int i = 1; i < iterators.size(); i ++)
@@ -172,16 +175,16 @@ struct RsRepeater
     uint8_t m_delay;
 };
 
-using ElemIdReg_t = osp::UniqueIdRegistry<RsElemId>;
+using ElemIdReg_t = lgrn::UniqueIdRegistry<RsElemId>;
 using ElemIdSto_t = ElemIdReg_t::Storage_t;
 
-using ElemLocIdReg_t = osp::UniqueIdRegistry<RsElemLocalId>;
+using ElemLocIdReg_t = lgrn::UniqueIdRegistry<RsElemLocalId>;
 using ElemLocIdSto_t = ElemLocIdReg_t::Storage_t;
 
 struct RsWorld
 {
-    osp::IdRegistry<RsNodeId> m_nodeIds;
-    osp::IdRefCount<RsNodeId> m_nodeRefCounts;
+    lgrn::IdRegistry<RsNodeId> m_nodeIds;
+    lgrn::IdRefCount<RsNodeId> m_nodeRefCounts;
 
     std::vector<power_level_t> m_nodePowers;
     std::vector<RsNodeConnect> m_nodeConnections;

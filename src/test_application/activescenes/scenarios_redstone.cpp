@@ -225,11 +225,14 @@ entt::any setup_scene(osp::Package &rPkg)
     rScene.m_chunks.m_blkTypes.resize(capacity);
     rScene.m_chunks.m_connect.resize(capacity);
     rScene.m_chunkDusts.m_dusts.resize(capacity);
+    rScene.m_chkNotify.resize(capacity);
 
     // Create single chunk
     rScene.m_singleChunk = rScene.m_chunks.m_ids.create();
     rScene.m_chunks.m_coordToChunk.emplace(ChunkCoord_t{0, 0, 0}, rScene.m_singleChunk);
     rScene.m_chunks.m_connect.at(0).m_blkPublish.ids_reserve(gc_chunkSize);
+    rScene.m_chkNotify.at(0).m_notifySlots.at(0).resize(gc_chunkSize);
+    rScene.m_blkTypeUpdates.at(0).m_changed.resize(gc_chunkSize);
 
     // Allocate buffers used by the single chunk
     //rScene.m_chunks.m_blkTypeConnect[0][rScene.m_blkTypeIds.id_of("dust")]
@@ -253,7 +256,7 @@ entt::any setup_scene(osp::Package &rPkg)
     return std::move(sceneAny);
 }
 
-osp::active::ActiveEnt add_mesh_quick(RedstoneTestScene& rScene, Matrix4 const& tf, osp::DependRes<MeshData> mesh)
+osp::active::ActiveEnt add_mesh_quick(RedstoneTestScene& rScene, osp::active::ActiveEnt parent, Matrix4 const& tf, osp::DependRes<MeshData> mesh)
 {
     using namespace osp::active;
 
@@ -281,7 +284,7 @@ osp::active::ActiveEnt add_mesh_quick(RedstoneTestScene& rScene, Matrix4 const& 
 
     // Add cube to hierarchy, parented to root
     SysHierarchy::add_child(
-            rScene.m_basic.m_hierarchy, rScene.m_hierRoot, ent);
+            rScene.m_basic.m_hierarchy, parent, ent);
 
     return ent;
 }
@@ -292,35 +295,82 @@ void chunk_update_visuals(RedstoneTestScene& rScene, ChunkId chkId)
 {
     using namespace osp::active;
 
-    TmpChkBlkTypeUpd_t const& blkTypeUpd = rScene.m_blkTypeUpdates[size_t(chkId)];
+    TmpChkBlkTypeUpd const& blkTypeUpd = rScene.m_blkTypeUpdates[size_t(chkId)];
 
-    ACtxVxRsDusts::ChunkDust_t &rDusts = rScene.m_chunkDusts.m_dusts.at(size_t(chkId));
+    ACtxVxRsDusts::ChkDust_t const &rDusts = rScene.m_chunkDusts.m_dusts.at(size_t(chkId));
 
     // Create models
 
     Vector3 chunkOffset{0}; // TODO
 
     // Create redstone dust models
-    if (auto it = blkTypeUpd.find(g_blkTypeIds.id_of("dust"));
-        it != blkTypeUpd.end())
+    if (auto it = blkTypeUpd.m_perType.find(g_blkTypeIds.id_of("dust"));
+        it != blkTypeUpd.m_perType.end())
     {
         for (size_t blockId : it->second.m_added)
         {
+            BlkRsDust const dust = rDusts[blockId];
+            EMultiDirs const dir = dust.m_connected;
+
+            //int const dirCount = std::bitset<8>(int(dust.m_connected)).count();
+
             Vector3 const pos = Vector3(index_to_pos(blockId)) + Vector3{0.5, 0.5, 0.5};
-            ActiveEnt meshEnt = add_mesh_quick(rScene, Matrix4::translation(pos), rScene.m_meshs.at("Redstone/redstone:Dust"));
+
+
+            Matrix4 tf = Matrix4::translation(pos);
+            bool line = false;
+
+            if (dir == (EMultiDir::POS_X | EMultiDir::NEG_X))
+            {
+                // X-aligned line
+                tf = tf * Matrix4::rotationY(90.0_degf);
+                line = true;
+            }
+            else if (dir == (EMultiDir::POS_Z | EMultiDir::NEG_Z))
+            {
+                // Z-aligned line
+                line = true;
+            }
+
+            osp::DependRes<MeshData> rootMesh = line
+                    ? rScene.m_meshs.at("Redstone/redstone:DustStraight")
+                    : rScene.m_meshs.at("Redstone/redstone:Dust");
+
+            ActiveEnt const meshEnt = add_mesh_quick(rScene, rScene.m_hierRoot, tf, rootMesh);
+
+            if (!line)
+            {
+                // put meshes for 4 sides
+                using side_t = std::pair<EMultiDir, std::string_view>;
+                auto const sides =
+                {
+                    side_t{EMultiDir::POS_X, "Redstone/redstone:DustLf"},
+                    side_t{EMultiDir::NEG_X, "Redstone/redstone:DustRt"},
+                    side_t{EMultiDir::POS_Z, "Redstone/redstone:DustFd"},
+                    side_t{EMultiDir::NEG_Z, "Redstone/redstone:DustBk"},
+                };
+
+                for (side_t const side : sides)
+                {
+                    if (dir & side.first)
+                    {
+                        add_mesh_quick(rScene, meshEnt, Matrix4{}, rScene.m_meshs.at(side.second));
+                    }
+                }
+            }
 
             rScene.m_drawing.m_color.emplace(meshEnt, 0x880000ff_rgbaf);
         }
     }
 
     // Create redstone torch models
-    if (auto it = blkTypeUpd.find(g_blkTypeIds.id_of("torch"));
-        it != blkTypeUpd.end())
+    if (auto it = blkTypeUpd.m_perType.find(g_blkTypeIds.id_of("torch"));
+        it != blkTypeUpd.m_perType.end())
     {
         for (size_t blockId : it->second.m_added)
         {
             Vector3 const pos = Vector3(index_to_pos(blockId)) + Vector3{0.5, 0.5, 0.5};
-            add_mesh_quick(rScene, Matrix4::translation(pos), rScene.m_meshs.at("Redstone/redstone:Torch"));
+            add_mesh_quick(rScene, rScene.m_hierRoot, Matrix4::translation(pos), rScene.m_meshs.at("Redstone/redstone:Torch"));
         }
     }
 }
@@ -336,142 +386,6 @@ void world_update_visuals(RedstoneTestScene& rScene)
 
 
 //-----------------------------------------------------------------------------
-
-/**
- * @brief Main block-related update function
- *
- * @param rScene
- * @param blkChanges
- */
-void update_blocks(RedstoneTestScene& rScene, ArrayView< std::pair<ChunkId, ChkBlkPlacements_t> > blkChanges)
-{
-    // Update block IDs
-    // * Modifies each chunk's BlkTypeId buffers
-    // * Writes modified chunks
-    world_update_block_ids(rScene, blkChanges);
-
-    // Accumolate subscription changes
-    TmpUpdPublish_t updPub;
-    TmpUpdSubscribe_t updSub(rScene.m_chunks.m_ids.capacity());
-    for (std::size_t chunkId : rScene.m_chunks.m_dirty)
-    {
-        TmpChkBlkTypeUpd_t const& blkTypeUpd = rScene.m_blkTypeUpdates[chunkId];
-        if (auto it = blkTypeUpd.find(g_blkTypeIds.id_of("dust"));
-            it != blkTypeUpd.end())
-        {
-            chunk_connect_dusts(it->second, ChunkId(chunkId), index_to_pos(chunkId), updPub, updSub[chunkId]);
-        }
-    }
-
-    // TODO: allocate chunks allowed to subscribe to not-yet-loaded chunks
-
-    // Apply publish changes
-    // 1 element for each chunk changed
-    for (std::size_t i = 0; i < updPub.size(); ++i)
-    {
-        Vector3i const pos = updPub.key(i);
-        TmpChkUpdPublish &rChkUpdConnect = updPub.value(i);
-        auto found = rScene.m_chunks.m_coordToChunk.find(ChunkCoord_t{pos.x(), pos.y(), pos.z()});
-
-        if (found == rScene.m_chunks.m_coordToChunk.end())
-        {
-            continue; // just skip non existent chunks for now
-        }
-
-        using PublishTo = TmpChkUpdPublish::PublishTo;
-        std::sort(rChkUpdConnect.m_changes.begin(), rChkUpdConnect.m_changes.end(),
-                  [] (PublishTo const& lhs, PublishTo const& rhs)
-        {
-            return lhs.m_pubBlk < rhs.m_pubBlk;
-        });
-
-        ChkConnect::MultiMap_t &rBlkPublish = rScene.m_chunks.m_connect.at(std::size_t(found->second)).m_blkPublish;
-
-        // Intention is to have a thread for each chunk do this.
-        // Multiple TmpChkUpdPublish can be passed to this thread and
-        // iterated all at once
-        using it_t = TmpChkUpdPublish::Vec_t::iterator;
-        using pair_t = std::pair<it_t, it_t>;
-        auto its = std::array
-        {
-                pair_t(rChkUpdConnect.m_changes.begin(),
-                       rChkUpdConnect.m_changes.end())
-        };
-        std::size_t const totalChanges = rChkUpdConnect.m_changes.size();
-
-        if (std::size_t const sizeReq
-                = lgrn::div_ceil(rBlkPublish.data_size() + totalChanges, gc_chunkSize) * gc_chunkSize;
-            rBlkPublish.data_capacity() < sizeReq)
-        {
-            rBlkPublish.data_reserve(sizeReq);
-        }
-
-        std::vector<BlkConnect> tmpConnect;
-        ChkBlkId currBlk = lgrn::id_null<ChkBlkId>();
-
-        auto flush = [&tmpConnect, &currBlk, &rBlkPublish] () -> void
-        {
-            if (tmpConnect.empty()) [[unlikely]]
-            {
-                return;
-            }
-
-            uint32_t const currBlkI = uint32_t(currBlk);
-
-            if (rBlkPublish.contains(currBlkI))
-            {
-                // erase existing subscribers
-                auto span = rBlkPublish[currBlkI];
-                tmpConnect.insert(tmpConnect.end(), span.begin(), span.end());
-                rBlkPublish.erase(currBlkI);
-            }
-
-            rBlkPublish.emplace(currBlkI, tmpConnect.begin(), tmpConnect.end());
-
-            OSP_LOG_TRACE("Block {} publishes to:", currBlk);
-
-            for (auto const fish : tmpConnect)
-            {
-                OSP_LOG_TRACE("* {}", fish.m_block);
-            }
-            tmpConnect.clear();
-
-        };
-
-        funnel_each(its.begin(), its.end(),
-                    [] (pair_t const& lhs, pair_t const& rhs) -> bool
-        {
-            return lhs.first->m_pubBlk < rhs.first->m_pubBlk;
-        },
-                    [&tmpConnect, &currBlk, flush] (it_t pubIt)
-        {
-            if (currBlk != pubIt->m_pubBlk)
-            {
-                flush();
-                currBlk = pubIt->m_pubBlk;
-            }
-
-            if (currBlk == pubIt->m_pubBlk)
-            {
-                tmpConnect.emplace_back(BlkConnect{pubIt->m_subChunk, pubIt->m_subBlk});
-            }
-        });
-
-        flush();
-
-        rBlkPublish.pack();
-    }
-
-
-
-    // # Update models
-    // * Syncs voxel data with OSP entities
-    world_update_visuals(rScene);
-
-
-    // clear block changes
-    rScene.m_blkTypeUpdates.clear();
-}
 
 /**
  * @brief Update an EngineTestScene, this just rotates the cube
@@ -806,6 +720,10 @@ on_draw_t gen_draw(RedstoneTestScene& rScene, ActiveApplication& rApp)
         }};
 
         update_blocks(rScene, changesArray);
+
+        // # Update models
+        // * Syncs voxel data with OSP entities
+        world_update_visuals(rScene);
 
         update_test_scene(rScene, delta);
 

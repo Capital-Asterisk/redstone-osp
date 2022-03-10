@@ -26,20 +26,22 @@ struct ChkEntModels
 
 struct BlkRsDust
 {
-    EMultiDir m_connected;
-    EMultiDir m_rises;
+    EMultiDirs m_connected{EMultiDir::NEG_X | EMultiDir::POS_X};
+    EMultiDirs m_rises;
     //ElemLocIdSto_t m_elem;
 };
 
 struct ACtxVxRsDusts
 {
-    using ChunkDust_t = Array<BlkRsDust>;
+    using ChkDust_t = Array<BlkRsDust>;
     // m_dusts[ChunkId][VxSubChunkId][VxSubChkBlkId]
-    std::vector<ChunkDust_t> m_dusts;
+    std::vector<ChkDust_t> m_dusts;
 };
 
 
-void chunk_connect_dusts(ChkBlkChanges const& dustBlkUpd, ChunkId chunkId, Vector3i chunkPos, TmpUpdPublish_t& rUpdPublish, TmpChkUpdSubscribe& rUpdChkSubscribe);
+void chunk_subscribe_dusts(ChkBlkChanges const& dustBlkUpd, ChunkId chunkId, Vector3i chunkPos, TmpUpdPublish_t& rUpdPublish, TmpChkUpdSubscribe& rUpdChkSubscribe);
+
+void chunk_connect_dusts(BlkTypeId type, ChunkId chkId, HierBitset_t const& notify, ACtxVxLoadedChunks const& chunks, ACtxVxRsDusts const& dusts, ACtxVxRsDusts::ChkDust_t &rChkDust);
 
 //-----------------------------------------------------------------------------
 
@@ -52,8 +54,11 @@ struct RedstoneScene
     ChunkId m_singleChunk;
 
     // temporary states
-    std::vector<TmpChkBlkTypeUpd_t> m_blkTypeUpdates;
+    std::vector<TmpChkBlkTypeUpd> m_blkTypeUpdates;
+    std::vector<TmpChkNotify> m_chkNotify;
 };
+
+void update_blocks(RedstoneScene& rScene, ArrayView< std::pair<ChunkId, ChkBlkPlacements_t> > blkChanges);
 
 void world_update_block_ids(
         RedstoneScene& rScene,

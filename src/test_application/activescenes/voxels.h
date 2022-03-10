@@ -6,6 +6,7 @@
 #include <Magnum/Math/Vector3.h>
 #include <Magnum/Magnum.h>
 
+#include <Corrade/Containers/Array.h>
 #include <Corrade/Containers/ArrayViewStl.h>
 
 #include <map>
@@ -120,7 +121,7 @@ void funnel_each(PAIR_IT_T first, PAIR_IT_T last, CMP_T&& cmp, FUNC_T&& func) no
 /* Types and fundementals */
 
 enum class BlkTypeId : uint8_t { };       // IDs for each different block type
-enum class ChkBlkId : uint32_t { };       // IDs for blocks within a chunk
+enum class ChkBlkId : uint16_t { };       // IDs for blocks within a chunk
 enum class ChunkId : uint16_t { };          // IDs for currently loaded chunks
 
 constexpr Vector3i const gc_chunkDim{16, 16, 16};
@@ -260,9 +261,13 @@ struct ChkBlkChanges
     HierBitset_t m_removed;
 };
 
-using TmpChkBlkTypeUpd_t = std::unordered_map< BlkTypeId, ChkBlkChanges >;
+struct TmpChkBlkTypeUpd
+{
+    std::unordered_map< BlkTypeId, ChkBlkChanges > m_perType;
+    HierBitset_t m_changed;
+};
 
-ChkBlkChanges& assure_chunk_update(TmpChkBlkTypeUpd_t &rBlkTypeUpd, BlkTypeId blkTypeId);
+ChkBlkChanges& assure_chunk_update(TmpChkBlkTypeUpd &rBlkTypeUpd, BlkTypeId blkTypeId);
 
 //-----------------------------------------------------------------------------
 
@@ -345,8 +350,28 @@ struct ChkConnect
 {
     using MultiMap_t = lgrn::IntArrayMultiMap<uint32_t, BlkConnect>;
 
-    MultiMap_t m_blkPublish;
-    MultiMap_t m_blkSubscribe;
+    MultiMap_t      m_blkPublish;
+    MultiMap_t      m_blkSubscribe;
+};
+
+struct TmpChkNotify
+{
+    struct NotifyPair
+    {
+        BlkTypeId m_blkTypeId;
+        uint8_t m_slot;
+    };
+
+    // Slots are associated with a set of block IDs to notify
+    std::array<HierBitset_t, 1> m_notifySlots;
+    std::vector<NotifyPair> m_notifyTypes;
+};
+
+// make one of these for each chunk-updating thread
+struct TmpExtNotify
+{
+    // [chunkId][blockID]
+    std::vector<HierBitset_t> m_chkNotify;
 };
 
 //-----------------------------------------------------------------------------
@@ -378,8 +403,19 @@ struct ACtxVxLoadedChunks
 };
 
 void chunk_assign_block_ids(
-        ArrayView<BlkTypeId> chkBlkTypeIds,
-        TmpChkBlkTypeUpd_t& rBlkTypeUpd,
-        ChkBlkPlacements_t const& blkPlacements);
+        BlkTypeId newBlkTypeId,
+        std::vector<ChkBlkPlace> const& rPlace,
+        ArrayView<BlkTypeId> blkTypeIds,
+        TmpChkBlkTypeUpd& rBlkTypeUpd);
+
+/**
+ * @brief chunk_notify_subscribers
+ *
+ * @param rConnect [in]
+ * @param changes [in]
+ * @param rChkNotify [out]
+ * @param rExtNotify [out]
+ */
+void chunk_notify_subscribers(ChkConnect const& rConnect, HierBitset_t const& changes, Array<BlkTypeId> const& blkTypes, TmpChkNotify& rChkNotify, TmpExtNotify& rExtNotify);
 
 } // namespace testapp::redstone

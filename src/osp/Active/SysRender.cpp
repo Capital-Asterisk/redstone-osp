@@ -24,7 +24,66 @@
  */
 #include "SysRender.h"
 
-using osp::active::SysRender;
+#include "../Resource/resources.h"
+
+using namespace osp;
+using namespace osp::active;
+
+MeshId SysRender::own_mesh_resource(ACtxDrawing& rCtxDrawing, ACtxDrawingRes& rCtxDrawingRes, Resources &rResources, ResId resId)
+{
+    auto [it, success] = rCtxDrawingRes.m_resToMesh.try_emplace(resId);
+    if (success)
+    {
+        ResIdOwner_t owner = rResources.owner_create(restypes::gc_mesh, resId);
+        MeshId const meshId = rCtxDrawing.m_meshIds.create();
+        rCtxDrawingRes.m_meshToRes.emplace(meshId, std::move(owner));
+        it->second = meshId;
+        return meshId;
+    }
+    return it->second;
+};
+
+TexId SysRender::own_texture_resource(ACtxDrawing& rCtxDrawing, ACtxDrawingRes& rCtxDrawingRes, Resources &rResources, ResId resId)
+{
+    auto [it, success] = rCtxDrawingRes.m_resToTex.try_emplace(resId);
+    if (success)
+    {
+        ResIdOwner_t owner = rResources.owner_create(restypes::gc_mesh, resId);
+        TexId const texId = rCtxDrawing.m_texIds.create();
+        rCtxDrawingRes.m_texToRes.emplace(texId, std::move(owner));
+        it->second = texId;
+        return texId;
+    }
+    return it->second;
+};
+
+void SysRender::clear_owners(ACtxDrawing& rCtxDrawing)
+{
+    for (TexIdOwner_t &rOwner : std::exchange(rCtxDrawing.m_diffuseTex, {}))
+    {
+        rCtxDrawing.m_texRefCounts.ref_release(rOwner);
+    }
+
+    for (MeshIdOwner_t &rOwner : std::exchange(rCtxDrawing.m_mesh, {}))
+    {
+        rCtxDrawing.m_meshRefCounts.ref_release(rOwner);
+    }
+}
+
+void SysRender::clear_resource_owners(ACtxDrawingRes& rCtxDrawingRes, Resources &rResources)
+{
+    for (auto & [_, rOwner] : std::exchange(rCtxDrawingRes.m_texToRes, {}))
+    {
+        rResources.owner_destroy(restypes::gc_texture, std::move(rOwner));
+    }
+    rCtxDrawingRes.m_resToTex.clear();
+
+    for (auto & [_, rOwner] : std::exchange(rCtxDrawingRes.m_meshToRes, {}))
+    {
+        rResources.owner_destroy(restypes::gc_mesh, std::move(rOwner));
+    }
+    rCtxDrawingRes.m_resToMesh.clear();
+}
 
 void SysRender::update_draw_transforms(
         acomp_storage_t<ACompHierarchy> const& hier,
@@ -58,12 +117,32 @@ void SysRender::update_draw_transforms(
     }
 }
 
-void SysRender::clear_dirty_materials(std::vector<MaterialData> &rMaterials)
+void SysRender::set_dirty_all(ACtxDrawing &rCtxDrawing)
 {
-    for (MaterialData &rMat : rMaterials)
+    using osp::active::active_sparse_set_t;
+
+    for (osp::active::MaterialData &rMat : rCtxDrawing.m_materials)
+    {
+        rMat.m_added.assign(std::begin(rMat.m_comp), std::end(rMat.m_comp));
+    }
+
+    // Set all meshs dirty
+    auto &rMeshSet = static_cast<active_sparse_set_t&>(rCtxDrawing.m_mesh);
+    rCtxDrawing.m_meshDirty.assign(std::begin(rMeshSet), std::end(rMeshSet));
+
+    // Set all textures dirty
+    auto &rDiffSet = static_cast<active_sparse_set_t&>(rCtxDrawing.m_diffuseTex);
+    rCtxDrawing.m_diffuseDirty.assign(std::begin(rMeshSet), std::end(rMeshSet));
+}
+
+void SysRender::clear_dirty_all(ACtxDrawing& rCtxDrawing)
+{
+    for (MaterialData &rMat : rCtxDrawing.m_materials)
     {
         rMat.m_added.clear();
         rMat.m_removed.clear();
     }
+    rCtxDrawing.m_meshDirty.clear();
+    rCtxDrawing.m_diffuseDirty.clear();
 }
 

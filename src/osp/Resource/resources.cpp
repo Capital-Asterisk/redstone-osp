@@ -40,7 +40,7 @@ ResId Resources::create(ResTypeId typeId, PkgId pkgId, std::string_view name)
     PerPkg &rPkg = m_pkgData[std::size_t(pkgId)];
     assert(rPkg.m_resTypeOwn.size() > std::size_t(typeId));
     PerPkgResType &rPkgType = rPkg.m_resTypeOwn[std::size_t(typeId)];
-    rPkgType.m_owned.resize(m_perResType.size());
+    rPkgType.m_owned.resize(rPerResType.m_resIds.capacity());
     rPkgType.m_owned.set(std::size_t(newResId));
 
     // Track name
@@ -71,24 +71,37 @@ ResId Resources::find(ResTypeId typeId, PkgId pkgId, std::string_view name) cons
     return findIt->second;
 }
 
-void Resources::store(ResTypeId typeId, ResId resId, ResIdStorage_t &rStorage) noexcept
+std::string_view Resources::name(ResTypeId typeId, ResId resId) const noexcept
 {
-    assert(!rStorage.has_value());
-    PerResType &rPerResType = get_type(typeId);
-    rPerResType.m_resRefs[std::size_t(resId)] ++;
-    rStorage.m_id = resId;
+    PerResType const &rPerResType = get_type(typeId);
+
+    return rPerResType.m_resNames[std::size_t(resId)];
 }
 
-void Resources::release(ResTypeId typeId, ResIdStorage_t &rStorage) noexcept
+lgrn::IdRegistry<ResId> const& Resources::ids(ResTypeId typeId) const noexcept
 {
-    if (!rStorage.has_value())
+    return get_type(typeId).m_resIds;
+}
+
+ResIdOwner_t Resources::owner_create(ResTypeId typeId, ResId resId) noexcept
+{
+    PerResType &rPerResType = get_type(typeId);
+    rPerResType.m_resRefs[std::size_t(resId)] ++;
+    ResIdOwner_t owner;
+    owner.m_id = resId;
+    return owner;
+}
+
+void Resources::owner_destroy(ResTypeId typeId, ResIdOwner_t&& rOwner) noexcept
+{
+    if (!rOwner.has_value())
     {
         return;
     }
     PerResType &rPerResType = get_type(typeId);
-    int &rCount = rPerResType.m_resRefs[std::size_t(rStorage.m_id)];
+    int &rCount = rPerResType.m_resRefs[std::size_t(rOwner.m_id)];
     rCount --;
-    rStorage.m_id = lgrn::id_null<ResId>();
+    rOwner.m_id = ResIdOwner_t{};
 }
 
 PkgId Resources::pkg_create()

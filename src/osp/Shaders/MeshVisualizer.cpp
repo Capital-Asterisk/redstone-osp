@@ -25,11 +25,8 @@
 
 #include "MeshVisualizer.h"
 
-#include "../Active/SysRender.h"
-
 #include <Magnum/GL/DefaultFramebuffer.h>
 #include <Magnum/GL/Renderer.h>
-#include <Magnum/Math/Color.h>
 
 // for the 0xrrggbb_rgbf and _deg literals
 using namespace Magnum::Math::Literals;
@@ -64,7 +61,7 @@ void shader::draw_ent_visualizer(
         Magnum::GL::Renderer::setDepthMask(false);
     }
 
-    MeshGlId const meshId = rData.m_pMeshId->get(ent);
+    MeshGlId const meshId = rData.m_pMeshId->get(ent).m_glId;
     Magnum::GL::Mesh &rMesh = rData.m_pMeshGl->get(meshId);
 
     rShader

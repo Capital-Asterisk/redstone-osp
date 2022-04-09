@@ -26,17 +26,20 @@
 
 #include <entt/core/any.hpp>
 
-#include <osp/Resource/Package.h>
+#include <osp/Resource/resourcetypes.h>
 
 #include <functional>
 
 namespace testapp
 {
 
+struct CommonTestScene;
+struct CommonSceneRendererGL;
 class ActiveApplication;
 
+// Stored inside an ActiveApplicaton to use as a main draw function.
+// Renderer state can be stored in lambda capture
 using on_draw_t = std::function<void(ActiveApplication&, float delta)>;
-
 
 namespace flight
 {
@@ -69,11 +72,12 @@ struct EngineTestScene;
 /**
  * @brief Setup Engine Test Scene
  *
- * @param rPkg [in] Package containing cube mesh used by test scene
+ * @param rResources    [ref] Application Resources containing cube mesh
+ * @param pkg           [in] Package Id the cube mesh is under
  *
  * @return entt::any containing scene data
  */
-entt::any setup_scene(osp::Package &rPkg);
+entt::any setup_scene(osp::Resources& rResources, osp::PkgId pkg);
 
 /**
  * @brief Generate ActiveApplication draw function
@@ -92,34 +96,27 @@ on_draw_t generate_draw_func(EngineTestScene& rScene, ActiveApplication& rApp);
 
 //-----------------------------------------------------------------------------
 
-namespace physicstest
+namespace scenes
 {
 
-struct PhysicsTestScene;
+// Note: Use generate_common_draw to setup common scenes
+//       in common_renderer_gl.h
 
-/**
- * @brief Setup Physics Test Scene
- *
- * @param rPkg [in]
- *
- * @return entt::any containing scene data
- */
-entt::any setup_scene(osp::Package &rPkg);
+struct PhysicsTest
+{
+    static void setup_scene(CommonTestScene &rScene, osp::PkgId pkg);
+    static void setup_renderer_gl(CommonSceneRendererGL& rRenderer, CommonTestScene& rScene, ActiveApplication& rApp) noexcept;
+};
 
-/**
- * @brief Generate ActiveApplication draw function
- *
- * This draw function stores renderer data, and is responsible for updating
- * and drawing the engine test scene.
- *
- * @param rScene [ref] Engine test scene. Must be in stable memory.
- * @param rApp   [ref] Existing ActiveApplication to use GL resources of
- *
- * @return ActiveApplication draw function
- */
-on_draw_t generate_draw_func(PhysicsTestScene& rScene, ActiveApplication& rApp);
+struct VehicleTest
+{
+    static void setup_scene(CommonTestScene &rScene, osp::PkgId pkg);
+    static void setup_renderer_gl(CommonSceneRendererGL& rRenderer, CommonTestScene& rScene, ActiveApplication& rApp) noexcept;
+};
 
-} // namespace physicstest
+
+} // namespace scenes
+
 
 //-----------------------------------------------------------------------------
 

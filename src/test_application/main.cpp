@@ -29,22 +29,29 @@
 
 #include "ActiveApplication.h"
 #include "activescenes/scenarios.h"
+#include "activescenes/common_scene.h"
+#include "activescenes/common_renderer_gl.h"
 
 #include "universes/simple.h"
 #include "universes/planets.h"
 
-#include <osp/Resource/AssetImporter.h>
+#include <osp/Resource/load_tinygltf.h>
+#include <osp/Resource/resources.h>
+#include <osp/Resource/ImporterData.h>
+
 #include <osp/string_concat.h>
 #include <osp/logging.h>
-
-#include <adera/ShipResources.h>
-#include <adera/Shaders/PlumeShader.h>
 
 #include <Magnum/MeshTools/Transform.h>
 #include <Magnum/Primitives/Cylinder.h>
 #include <Magnum/Primitives/Cube.h>
 #include <Magnum/Primitives/Grid.h>
 #include <Magnum/Primitives/Icosphere.h>
+
+#include <Magnum/Trade/ImageData.h>
+#include <Magnum/Trade/TextureData.h>
+#include <Magnum/Trade/MeshData.h>
+
 #include <Corrade/Utility/Arguments.h>
 
 #include <iostream>
@@ -81,16 +88,28 @@ void start_magnum_async();
 void load_a_bunch_of_stuff();
 
 /**
+ * @brief Setup a scene that uses CommonTestScene
+ */
+template <typename SCENE_T>
+void setup_common_scene();
+
+/**
  * @brief Attempt to destroy everything in the universe
  */
 bool destroy_universe();
+
+/**
+ * @brief Deal with resource reference counts for a clean termination
+ */
+void clear_resource_owners();
 
 // called only from commands to display information
 void debug_print_help();
 void debug_print_resources();
 
-// Stores loaded resources in packages.
-osp::PackageRegistry g_packages;
+// Stores loaded resources
+osp::Resources g_resources;
+osp::PkgId g_defaultPkg;
 
 // Test application supports 1 Active Scene
 entt::any g_activeScene;
@@ -119,22 +138,11 @@ struct Option
 
 std::unordered_map<std::string_view, Option> const g_scenes
 {
-    {"redstone", {"LOL what?", [] {
 
-        using namespace redstone;
-        g_activeScene = setup_scene(g_packages.find("lzdb"));
-
-        g_appSetup = [] (ActiveApplication& rApp)
-        {
-            RedstoneTestScene& rScene
-                    = entt::any_cast<RedstoneTestScene&>(g_activeScene);
-            rApp.set_on_draw(gen_draw(rScene, rApp));
-        };
-    }}},
     {"enginetest", {"Demonstrate basic game engine functionality", [] {
 
         using namespace enginetest;
-        g_activeScene = setup_scene(g_packages.find("lzdb"));
+        g_activeScene = setup_scene(g_resources, g_defaultPkg);
 
         g_appSetup = [] (ActiveApplication& rApp)
         {
@@ -142,18 +150,13 @@ std::unordered_map<std::string_view, Option> const g_scenes
                     = entt::any_cast<EngineTestScene&>(g_activeScene);
             rApp.set_on_draw(generate_draw_func(rScene, rApp));
         };
-    }}},
+    }}}
+    ,
     {"physicstest", {"Physics lol", [] {
-
-        using namespace physicstest;
-        g_activeScene = setup_scene(g_packages.find("lzdb"));
-
-        g_appSetup = [] (ActiveApplication& rApp)
-        {
-            PhysicsTestScene& rScene
-                    = entt::any_cast<PhysicsTestScene&>(g_activeScene);
-            rApp.set_on_draw(generate_draw_func(rScene, rApp));
-        };
+        setup_common_scene<scenes::PhysicsTest>();
+    }}},
+    {"vehicletest", {"Vehicle and glTF", [] {
+        setup_common_scene<scenes::VehicleTest>();
     }}}
 };
 
@@ -189,6 +192,7 @@ int main(int argc, char** argv)
         if(it == std::end(g_scenes))
         {
             std::cerr << "unknown scene" << std::endl;
+            clear_resource_owners();
             exit(-1);
         }
 
@@ -283,6 +287,8 @@ int debug_cli_loop()
         }
     }
 
+    clear_resource_owners();
+
     return 0;
 }
 
@@ -312,10 +318,29 @@ void start_magnum_async()
 
         OSP_LOG_INFO("Closed Magnum Application");
 
+        osp::active::SysRenderGL::clear_resource_owners(g_activeApplication->get_render_gl(), g_resources);
+
         g_activeApplication.reset();
 
     });
     g_magnumThread.swap(t);
+}
+
+template <typename SCENE_T>
+void setup_common_scene()
+{
+    g_activeScene.emplace<testapp::CommonTestScene>(g_resources);
+    auto &rScene = entt::any_cast<CommonTestScene&>(g_activeScene);
+
+    SCENE_T::setup_scene(rScene, g_defaultPkg);
+
+    // Renderer and draw function is created when g_appSetup is invoked
+    g_appSetup = [] (ActiveApplication& rApp)
+    {
+        auto& rScene
+                = entt::any_cast<CommonTestScene&>(g_activeScene);
+        rApp.set_on_draw(generate_common_draw(rScene, rApp, &SCENE_T::setup_renderer_gl));
+    };
 }
 
 bool destroy_universe()
@@ -329,97 +354,125 @@ bool destroy_universe()
 
     g_universeScene.reset();
 
-    // Destroy blueprints as part of destroying all vehicles
-    g_packages.find("lzdb").clear<osp::BlueprintVehicle>();
-
     OSP_LOG_INFO("explosion* Universe destroyed!");
 
     return true;
 }
 
-// TODO: move this somewhere else
-template<typename MACH_T>
-constexpr void register_machine(osp::Package &rPkg)
-{
-    rPkg.add<osp::RegisteredMachine>(std::string(MACH_T::smc_mach_name),
-                                     osp::mach_id<MACH_T>());
-}
-
-// TODO: move this somewhere else
-template<typename WIRETYPE_T>
-constexpr void register_wiretype(osp::Package &rPkg)
-{
-    rPkg.add<osp::RegisteredWiretype>(std::string(WIRETYPE_T::smc_wire_name),
-                                      osp::wiretype_id<WIRETYPE_T>());
-}
-
-
 
 void load_a_bunch_of_stuff()
 {
-    // Create a new package
-    osp::Package &rDebugPack = g_packages.create("lzdb");
+    using namespace osp::restypes;
+    using namespace Magnum;
+    using Primitives::CylinderFlag;
+
+    g_resources.resize_types(osp::resource_type_count());
+
+    g_resources.data_register<Trade::ImageData2D>(gc_image);
+    g_resources.data_register<Trade::TextureData>(gc_texture);
+    g_resources.data_register<osp::TextureImgSource>(gc_texture);
+    g_resources.data_register<Trade::MeshData>(gc_mesh);
+    g_resources.data_register<osp::ImporterData>(gc_importer);
+    g_resources.data_register<osp::Prefabs>(gc_importer);
+    osp::register_tinygltf_resources(g_resources);
+    g_defaultPkg = g_resources.pkg_create();
 
     osp::AssetImporter::load_sturdy_file(
         "Redstone/redstone.gltf", rDebugPack, rDebugPack);
 
     // Load sturdy glTF files
     const std::string_view datapath = {"OSPData/adera/"};
-    const std::vector<std::string_view> meshes = 
+    const std::vector<std::string_view> meshes =
     {
         "spamcan.sturdy.gltf",
         "stomper.sturdy.gltf",
         "ph_capsule.sturdy.gltf",
         "ph_fuselage.sturdy.gltf",
         "ph_engine.sturdy.gltf",
-        "ph_plume.sturdy.gltf",
-        "ph_rcs.sturdy.gltf",
-        "ph_rcs_plume.sturdy.gltf"
+        //"ph_plume.sturdy.gltf",
+        "ph_rcs.sturdy.gltf"
+        //"ph_rcs_plume.sturdy.gltf"
     };
+
+    // TODO: Make new gltf loader. This will read gltf files and dump meshes,
+    //       images, textures, and other relevant data into osp::Resources
     for (auto meshName : meshes)
     {
-        osp::AssetImporter::load_sturdy_file(
-            osp::string_concat(datapath, meshName), rDebugPack, rDebugPack);
+        osp::ResId res = osp::load_tinygltf_file(osp::string_concat(datapath, meshName), g_resources, g_defaultPkg);
+        osp::assigns_prefabs_tinygltf(g_resources, res);
     }
 
-    // Load noise textures
-    const std::string noise256 = "noise256";
-    const std::string noise1024 = "noise1024";
-    const std::string n256path = osp::string_concat(datapath, noise256, ".png");
-    const std::string n1024path = osp::string_concat(datapath, noise1024, ".png");
-
-    osp::AssetImporter::load_image(n256path, rDebugPack);
-    osp::AssetImporter::load_image(n1024path, rDebugPack);
-
-    // Load placeholder fuel type
-    using adera::active::machines::ShipResourceType;
-    ShipResourceType fuel
-    {
-        "fuel",        // identifier
-        "Rocket fuel", // display name
-        1 << 16,       // quanta per unit
-        1.0f,          // volume per unit (m^3)
-        1000.0f,       // mass per unit (kg)
-        1000.0f        // density (kg/m^3)
-    };
-
-    rDebugPack.add<ShipResourceType>("fuel", std::move(fuel));
-
-    using namespace Magnum;
-    using Primitives::CylinderFlag;
 
     // Add a default primitives
-    rDebugPack.add<Trade::MeshData>("cube", Primitives::cubeSolid());
-    rDebugPack.add<Trade::MeshData>("cube_wireframe", Primitives::cubeWireframe());
-    rDebugPack.add<Trade::MeshData>("sphere", Primitives::icosphereSolid(2));
-    rDebugPack.add<Trade::MeshData>(
-            "cylinder",
-            Primitives::cylinderSolid(3, 16, 1.0f, CylinderFlag::CapEnds));
+    auto const add_mesh_quick = [] (std::string_view name, Trade::MeshData&& data)
+    {
+        osp::ResId const meshId = g_resources.create(gc_mesh, g_defaultPkg, name);
+        g_resources.data_add<Trade::MeshData>(gc_mesh, meshId, std::forward<Trade::MeshData>(data));
+    };
 
-    // Add grids
-    rDebugPack.add<Trade::MeshData>("grid64", Magnum::Primitives::grid3DWireframe({63, 63}));
+    add_mesh_quick("cube", Primitives::cubeSolid());
+    add_mesh_quick("sphere", Primitives::icosphereSolid(2));
+    add_mesh_quick("cylinder", Primitives::cylinderSolid(3, 16, 1.0f, CylinderFlag::CapEnds));
+    add_mesh_quick("grid64solid", Primitives::grid3DSolid({63, 63}));
 
     OSP_LOG_INFO("Resource loading complete");
+}
+
+static void resource_for_each_type(osp::ResTypeId type, void(*do_thing)(osp::ResId))
+{
+    lgrn::IdRegistry<osp::ResId> const &rReg = g_resources.ids(type);
+    for (std::size_t i = 0; i < rReg.capacity(); ++i)
+    {
+        if (rReg.exists(osp::ResId(i)))
+        {
+            do_thing(osp::ResId(i));
+        }
+    }
+}
+
+void clear_resource_owners()
+{
+    using namespace osp::restypes;
+
+    // Texture resources contain osp::TextureImgSource, which refererence counts
+    // their associated image data
+    resource_for_each_type(gc_texture, [] (osp::ResId id)
+    {
+        auto *pData = g_resources
+                .data_try_get<osp::TextureImgSource>(gc_texture, id);
+        if (pData == nullptr)
+        {
+            return;
+        }
+
+        g_resources.owner_destroy(gc_image, std::move(*pData));
+    });
+
+    // Importer data own a lot of other resources
+    resource_for_each_type(gc_importer, [] (osp::ResId id)
+    {
+        auto *pData = g_resources
+                .data_try_get<osp::ImporterData>(gc_importer, id);
+        if (pData == nullptr)
+        {
+            return;
+        }
+
+        for (osp::ResIdOwner_t &rOwner : pData->m_images)
+        {
+            g_resources.owner_destroy(gc_image, std::move(rOwner));
+        }
+
+        for (osp::ResIdOwner_t &rOwner : pData->m_textures)
+        {
+            g_resources.owner_destroy(gc_texture, std::move(rOwner));
+        }
+
+        for (osp::ResIdOwner_t &rOwner : pData->m_meshes)
+        {
+            g_resources.owner_destroy(gc_mesh, std::move(rOwner));
+        }
+    });
 }
 
 //-----------------------------------------------------------------------------
@@ -443,46 +496,10 @@ void debug_print_help()
         << "* exit      - Deallocate everything and return memory to OS\n";
 }
 
-template <typename RES_T>
-void debug_print_resource_group(osp::Package const& rPkg)
-{
-    auto const pGroup = rPkg.group_get<RES_T>();
-
-    if (pGroup == nullptr)
-    {
-        return;
-    }
-
-    std::cout << "  * TYPE: " << entt::type_name<RES_T>().value() << "\n";
-
-    for (auto const& [key, resource] : *pGroup)
-    {
-        std::cout << "    * " << (resource.m_data.has_value() ? "LOADED" : "RESERVED") << ": " << key << "\n";
-    }
-}
-
-void debug_print_package(osp::Package const& rPkg, osp::ResPrefix_t const& prefix)
-{
-    std::cout << "* PACKAGE: " << prefix << "\n";
-
-    // TODO: maybe consider polymorphic access to resources?
-    debug_print_resource_group<osp::PrototypePart>(rPkg);
-    debug_print_resource_group<osp::BlueprintVehicle>(rPkg);
-
-    debug_print_resource_group<Magnum::Trade::ImageData2D>(rPkg);
-    debug_print_resource_group<Magnum::Trade::MeshData>(rPkg);
-    debug_print_resource_group<Magnum::GL::Texture2D>(rPkg);
-    debug_print_resource_group<Magnum::GL::Mesh>(rPkg);
-
-    debug_print_resource_group<adera::active::machines::ShipResourceType>(rPkg);
-}
-
 void debug_print_resources()
 {
-    for (auto const& [prefix, pkg] : g_packages.get_map())
-    {
-        debug_print_package(pkg, prefix);
-    }
+    // TODO: Add features to list resources in osp::Resources
+    std::cout << "Not yet implemented!\n";
 }
 
 

@@ -37,7 +37,7 @@
 
 #include <osp/Shaders/Phong.h>
 
-#include <osp/Resource/Package.h>
+#include <osp/Resource/resources.h>
 
 #include <longeron/id_management/registry.hpp>
 
@@ -47,6 +47,8 @@
 #include <Magnum/GL/DefaultFramebuffer.h>
 
 #include <Corrade/Containers/ArrayViewStl.h>
+
+using osp::active::ActiveEnt;
 
 using Magnum::Trade::MeshData;
 using Magnum::Trade::ImageData2D;
@@ -69,26 +71,46 @@ constexpr int const gc_maxMaterials = 2;
  */
 struct EngineTestScene
 {
+    ~EngineTestScene()
+    {
+        osp::active::SysRender::clear_owners(m_drawing);
+        osp::active::SysRender::clear_resource_owners(m_drawingRes, *m_pResources);
+        m_drawing.m_meshRefCounts.ref_release(m_meshCube);
+    }
+
+    osp::Resources *m_pResources;
+
     // ID registry generates entity IDs, and keeps track of which ones exist
-    lgrn::IdRegistry<osp::active::ActiveEnt> m_activeIds;
+    lgrn::IdRegistry<ActiveEnt> m_activeIds;
 
     // Components and supporting data structures
     osp::active::ACtxBasic          m_basic;    
     osp::active::ACtxDrawing        m_drawing;
+    osp::active::ACtxDrawingRes     m_drawingRes;
 
     // Hierarchy root, needs to exist so all hierarchy entities are connected
-    osp::active::ActiveEnt          m_hierRoot;
+    ActiveEnt                       m_hierRoot{lgrn::id_null<ActiveEnt>()};
 
     // The rotating cube
-    osp::active::ActiveEnt          m_cube;
+    ActiveEnt                       m_cube{lgrn::id_null<ActiveEnt>()};
+
+    osp::active::MeshIdOwner_t      m_meshCube;
 };
 
-entt::any setup_scene(osp::Package &rPkg)
+entt::any setup_scene(osp::Resources& rResources, osp::PkgId pkg)
 {
     using namespace osp::active;
 
     entt::any sceneAny = entt::make_any<EngineTestScene>();
     EngineTestScene &rScene = entt::any_cast<EngineTestScene&>(sceneAny);
+
+    rScene.m_pResources = &rResources;
+
+    // Take ownership of cube mesh
+    osp::ResId const resCube = rResources.find(osp::restypes::gc_mesh, pkg, "cube");
+    assert(resCube != lgrn::id_null<osp::ResId>());
+    MeshId const meshCube = SysRender::own_mesh_resource(rScene.m_drawing, rScene.m_drawingRes, rResources, resCube);
+    rScene.m_meshCube = rScene.m_drawing.m_meshRefCounts.ref_add(meshCube);
 
     // Allocate space to fit all materials
     rScene.m_drawing.m_materials.resize(gc_maxMaterials);
@@ -119,7 +141,7 @@ entt::any setup_scene(osp::Package &rPkg)
 
     // Add cube mesh to cube
     rScene.m_drawing.m_mesh.emplace(
-            rScene.m_cube, ACompMesh{ rPkg.get<MeshData>("cube") });
+            rScene.m_cube, rScene.m_drawing.m_meshRefCounts.ref_add(rScene.m_meshCube));
     rScene.m_drawing.m_meshDirty.push_back(rScene.m_cube);
 
     // Add common material to cube
@@ -148,6 +170,9 @@ entt::any setup_scene(osp::Package &rPkg)
  */
 void update_test_scene(EngineTestScene& rScene, float delta)
 {
+    // Clear drawing-related dirty flags/vectors
+    osp::active::SysRender::clear_dirty_all(rScene.m_drawing);
+
     // Rotate the cube
     osp::Matrix4 &rCubeTf
             = rScene.m_basic.m_transform.get(rScene.m_cube).m_transform;
@@ -175,28 +200,18 @@ struct EngineTestRenderer
 
     osp::active::ACtxSceneRenderGL m_renderGl{};
 
-    osp::active::ActiveEnt m_camera;
+    ActiveEnt m_camera{lgrn::id_null<ActiveEnt>()};
     ACtxCameraController m_camCtrl;
 
     osp::shader::ACtxDrawPhong m_phong{};
 };
 
-/**
- * @brief Render an EngineTestScene
- *
- * @param rApp      [ref] Application with GL context and resources
- * @param rScene    [ref] Test scene to render
- * @param rRenderer [ref] Renderer data for test scene
- */
-void render_test_scene(
+void sync_test_scene(
         ActiveApplication& rApp, EngineTestScene const& rScene,
         EngineTestRenderer& rRenderer)
 {
     using namespace osp::active;
     using namespace osp::shader;
-    using Magnum::GL::Framebuffer;
-    using Magnum::GL::FramebufferClear;
-    using Magnum::GL::Texture2D;
 
     // Assign Phong shader to entities with the gc_mat_common material, and put
     // results into the fwd_opaque render group
@@ -213,14 +228,17 @@ void render_test_scene(
                 std::cbegin(rMatCommon.m_added),
                 std::cend(rMatCommon.m_added));
 
-    // Load any required meshes
-    SysRenderGL::compile_meshes(
-            rScene.m_drawing.m_mesh, rScene.m_drawing.m_meshDirty,
+    // Load required meshes and textures into OpenGL
+    SysRenderGL::sync_scene_resources(rScene.m_drawingRes, *rScene.m_pResources, rApp.get_render_gl());
+
+    // Assign GL meshes to entities with a mesh component
+    SysRenderGL::assign_meshes(
+            rScene.m_drawing.m_mesh, rScene.m_drawingRes.m_meshToRes, rScene.m_drawing.m_meshDirty,
             rRenderer.m_renderGl.m_meshId, rApp.get_render_gl());
 
-    // Load any required textures
-    SysRenderGL::compile_textures(
-            rScene.m_drawing.m_diffuseTex, rScene.m_drawing.m_diffuseDirty,
+    // Assign GL textures to entities with a texture component
+    SysRenderGL::assign_textures(
+            rScene.m_drawing.m_diffuseTex, rScene.m_drawingRes.m_texToRes, rScene.m_drawing.m_diffuseDirty,
             rRenderer.m_renderGl.m_diffuseTexId, rApp.get_render_gl());
 
     // Calculate hierarchy transforms
@@ -228,6 +246,23 @@ void render_test_scene(
             rScene.m_basic.m_hierarchy,
             rScene.m_basic.m_transform,
             rRenderer.m_renderGl.m_drawTransform);
+}
+
+/**
+ * @brief Render an EngineTestScene
+ *
+ * @param rApp      [ref] Application with GL context and resources
+ * @param rScene    [ref] Test scene to render
+ * @param rRenderer [ref] Renderer data for test scene
+ */
+void render_test_scene(
+        ActiveApplication& rApp, EngineTestScene const& rScene,
+        EngineTestRenderer& rRenderer)
+{
+    using namespace osp::active;
+    using Magnum::GL::Framebuffer;
+    using Magnum::GL::FramebufferClear;
+    using Magnum::GL::Texture2D;
 
     // Get camera to calculate view and projection matrix
     ACompCamera const &rCamera = rScene.m_basic.m_camera.get(rRenderer.m_camera);
@@ -287,19 +322,10 @@ on_draw_t generate_draw_func(EngineTestScene& rScene, ActiveApplication& rApp)
     // Create render group for forward opaque pass
     pRenderer->m_renderGroups.m_groups.emplace("fwd_opaque", RenderGroup{});
 
-    // Set all materials dirty
-    for (MaterialData &rMat : rScene.m_drawing.m_materials)
-    {
-        rMat.m_added.assign(std::begin(rMat.m_comp), std::end(rMat.m_comp));
-    }
-
-    // Set all meshs dirty
-    auto &rMeshSet = static_cast<active_sparse_set_t&>(rScene.m_drawing.m_mesh);
-    rScene.m_drawing.m_meshDirty.assign(std::begin(rMeshSet), std::end(rMeshSet));
-
-    // Set all textures dirty
-    auto &rDiffSet = static_cast<active_sparse_set_t&>(rScene.m_drawing.m_diffuseTex);
-    rScene.m_drawing.m_diffuseDirty.assign(std::begin(rMeshSet), std::end(rMeshSet));
+    // Set all drawing stuff dirty then sync with renderer.
+    // This allows clean re-openning of the scene
+    SysRender::set_dirty_all(rScene.m_drawing);
+    sync_test_scene(rApp, rScene, *pRenderer);
 
     return [&rScene, pRenderer = std::move(pRenderer)] (
             ActiveApplication& rApp, float delta)
@@ -315,9 +341,8 @@ on_draw_t generate_draw_func(EngineTestScene& rScene, ActiveApplication& rApp)
                 rScene.m_basic.m_transform.get(pRenderer->m_camera),
                 delta, true);
 
+        sync_test_scene(rApp, rScene, *pRenderer);
         render_test_scene(rApp, rScene, *pRenderer);
-
-        SysRender::clear_dirty_materials(rScene.m_drawing.m_materials);
     };
 }
 

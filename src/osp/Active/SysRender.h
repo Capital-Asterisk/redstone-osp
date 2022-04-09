@@ -26,6 +26,8 @@
 
 #include "drawing.h"
 
+#include <unordered_map>
+
 namespace osp::active
 {
 
@@ -119,6 +121,45 @@ class SysRender
 {
 public:
 
+    /**
+     * @brief Attempt to create a scene mesh associated with a resource
+     *
+     * @param rCtxDrawing       [ref] Drawing data
+     * @param rCtxDrawingRes    [ref] Resource drawing data
+     * @param rResources        [ref] Application Resources containing meshes
+     * @param resId             [in] Mesh Resource Id
+     *
+     * @return Id of new mesh, existing mesh Id if it already exists.
+     */
+    static MeshId own_mesh_resource(
+            ACtxDrawing& rCtxDrawing,
+            ACtxDrawingRes& rCtxDrawingRes,
+            Resources& rResources,
+            ResId resId);
+
+    static TexId own_texture_resource(
+            ACtxDrawing& rCtxDrawing,
+            ACtxDrawingRes& rCtxDrawingRes,
+            Resources& rResources,
+            ResId resId);
+
+    /**
+     * @brief Remove all mesh and texture components, aware of refcounts
+     *
+     * @param rCtxDrawing       [ref] Drawing data
+     */
+    static void clear_owners(ACtxDrawing& rCtxDrawing);
+
+    /**
+     * @brief Dissociate resources from the scene's meshes and textures
+     *
+     * @param rCtxDrawingRes    [ref] Resource drawing data
+     * @param rResources        [ref] Application Resources
+     */
+    static void clear_resource_owners(
+            ACtxDrawingRes& rCtxDrawingRes,
+            Resources& rResources);
+
     inline static void add_draw_transforms_recurse(
             acomp_storage_t<ACompHierarchy> const& hier,
             acomp_storage_t<ACompDrawTransform>& rDrawTf,
@@ -148,19 +189,26 @@ public:
             acomp_storage_t<ACompDrawTransform>& rDrawTf);
 
     /**
-     * @brief Clear dirty vectors (m_added, m_removed) of all materials
+     * @brief Set all dirty flags/vectors
      *
-     * @param rMaterials [ref] Materials vector with vectors to clear
+     * @param rCtxDrawing [ref] Drawing data
      */
-    static void clear_dirty_materials(std::vector<MaterialData> &rMaterials);
+    static void set_dirty_all(ACtxDrawing& rCtxDrawing);
+
+    /**
+     * @brief Clear all dirty flags/vectors
+     *
+     * @param rCtxDrawing [ref] Drawing data
+     */
+    static void clear_dirty_all(ACtxDrawing& rCtxDrawing);
 
     template<typename IT_T>
     static void update_delete_drawing(
-            ACtxDrawing &rCtxDraw, IT_T first, IT_T last);
+            ACtxDrawing& rCtxDraw, IT_T first, IT_T last);
 
     template<typename IT_T>
     static void update_delete_groups(
-            ACtxRenderGroups &rCtxGroups, IT_T first, IT_T last);
+            ACtxRenderGroups& rCtxGroups, IT_T first, IT_T last);
 
 private:
 
@@ -202,25 +250,48 @@ void SysRender::assure_draw_transforms(
     }
 }
 
+template<typename STORAGE_T, typename REFCOUNT_T>
+void remove_refcounted(
+        ActiveEnt ent, STORAGE_T &rStorage, REFCOUNT_T &rRefcount)
+{
+    if (rStorage.contains(ent))
+    {
+        auto &rOwner = rStorage.get(ent);
+        if (rOwner.has_value())
+        {
+            rRefcount.ref_release(rOwner);
+        }
+        rStorage.erase(ent);
+    }
+}
+
 template<typename IT_T>
 void SysRender::update_delete_drawing(
-        ACtxDrawing &rCtxDraw, IT_T first, IT_T last)
+        ACtxDrawing& rCtxDraw, IT_T first, IT_T last)
 {
-    rCtxDraw.m_opaque           .remove(first, last);
-    rCtxDraw.m_transparent      .remove(first, last);
-    rCtxDraw.m_visible          .remove(first, last);
-    rCtxDraw.m_mesh             .remove(first, last);
-    rCtxDraw.m_diffuseTex       .remove(first, last);
-
-    for (MaterialData& rMat : rCtxDraw.m_materials)
+    while (first != last)
     {
-        rMat.m_comp.remove(first, last);
+        ActiveEnt const ent = *first;
+        rCtxDraw.m_opaque       .remove(ent);
+        rCtxDraw.m_transparent  .remove(ent);
+        rCtxDraw.m_visible      .remove(ent);
+
+        // Textures and meshes are reference counted
+        remove_refcounted(ent, rCtxDraw.m_diffuseTex, rCtxDraw.m_texRefCounts);
+        remove_refcounted(ent, rCtxDraw.m_mesh, rCtxDraw.m_meshRefCounts);
+
+        for (MaterialData& rMat : rCtxDraw.m_materials)
+        {
+            rMat.m_comp.remove(ent);
+        }
+
+        std::advance(first, 1);
     }
 }
 
 template<typename IT_T>
 void SysRender::update_delete_groups(
-        ACtxRenderGroups &rCtxGroups, IT_T first, IT_T last)
+        ACtxRenderGroups& rCtxGroups, IT_T first, IT_T last)
 {
     if (first == last)
     {

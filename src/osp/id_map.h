@@ -1,6 +1,6 @@
 /**
  * Open Space Program
- * Copyright © 2019-2021 Open Space Program Project
+ * Copyright © 2019-2022 Open Space Program Project
  *
  * MIT License
  *
@@ -22,12 +22,21 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+#pragma once
 
-#include "SysCustomMeshGL.h"
+#include <entt/container/dense_hash_map.hpp>
 
-using namespace osp::active;
-
-void SysCustomMeshGL::update_geometry_gl()
+namespace osp
 {
+
+// Preferred container to map int/enum Ids with other Ids or small datatypes
+template <typename KEY_T, typename VALUE_T>
+using IdMap_t = entt::dense_hash_map<KEY_T, VALUE_T>;
+
+// TODO: Consider writing a wrapper that specializes the map with the integer
+//       underlying type of KEY_T. This will make maps easier to manage as they
+//       can be converted between each other, and may improve compile times as
+//       only one specialization is actually made.
+//       Also consider using extern templates
 
 }

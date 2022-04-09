@@ -1,6 +1,6 @@
 /**
  * Open Space Program
- * Copyright © 2019-2020 Open Space Program Project
+ * Copyright © 2019-2022 Open Space Program Project
  *
  * MIT License
  *
@@ -22,27 +22,26 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-#include "Package.h"
+#pragma once
 
+#include "resourcetypes.h"
 
+#include <string_view>
 
 namespace osp
 {
 
-StrViewPair_t decompose_str(std::string_view path, const char delim)
-{
-    std::size_t pos = path.find(delim);
-    return {
-        path.substr(0, pos),
-        path.substr(pos + 1, path.length())
-    };
-}
+void register_tinygltf_resources(Resources &rResources);
+ResId load_tinygltf_file(std::string_view filepath, Resources &rResources, PkgId pkg);
 
-Path decompose_path(std::string_view path)
-{
-    StrViewPair_t pair = decompose_str(path, ':');
-    return { pair.first, pair.second };
-}
-
+/**
+ * @brief Assign prefabs (potentially Parts) and add physical properties to an
+ *        ImporterData loaded from tinygltf
+ *
+ * @param rResources
+ * @param pkg
+ * @param importer
+ */
+void assigns_prefabs_tinygltf(Resources &rResources, ResId importer);
 
 }

@@ -24,10 +24,6 @@
  */
 #include "Phong.h"
 
-#include <osp/Active/SysRender.h>
-
-#include <Magnum/Math/Color.h>
-
 // for the 0xrrggbb_rgbf and angle literals
 using namespace Magnum::Math::Literals;
 
@@ -57,7 +53,8 @@ void shader::draw_ent_phong(
 
     if (rShader.flags() & Flag::DiffuseTexture)
     {
-        Magnum::GL::Texture2D &rTexture = rData.m_pTexGl->get(rData.m_pDiffuseTexId->get(ent));
+        TexGlId const texGlId = rData.m_pDiffuseTexId->get(ent).m_glId;
+        Magnum::GL::Texture2D &rTexture = rData.m_pTexGl->get(texGlId);
         rShader.bindDiffuseTexture(rTexture);
 
         if (rShader.flags() & (Flag::AmbientTexture | Flag::AlphaMask))
@@ -73,7 +70,7 @@ void shader::draw_ent_phong(
                                 : 0xffffffff_rgbaf);
     }
 
-    MeshGlId const meshId = rData.m_pMeshId->get(ent);
+    MeshGlId const meshId = rData.m_pMeshId->get(ent).m_glId;
     Magnum::GL::Mesh &rMesh = rData.m_pMeshGl->get(meshId);
 
     rShader
@@ -94,7 +91,7 @@ void shader::assign_phong(
         RenderGroup::Storage_t *pStorageOpaque,
         RenderGroup::Storage_t *pStorageTransparent,
         acomp_storage_t<ACompOpaque> const& opaque,
-        acomp_storage_t<active::TexGlId> const& diffuse,
+        acomp_storage_t<active::ACompTexGl> const& diffuse,
         ACtxDrawPhong &rData)
 {
 

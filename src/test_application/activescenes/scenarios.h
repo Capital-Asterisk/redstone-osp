@@ -115,22 +115,20 @@ struct VehicleTest
 };
 
 
+
+
 } // namespace scenes
 
 
-//-----------------------------------------------------------------------------
-
 namespace redstone
 {
+struct Redstone
+{
+    static void setup_scene(CommonTestScene &rScene, osp::PkgId pkg);
+    static void setup_renderer_gl(CommonSceneRendererGL& rRenderer, CommonTestScene& rScene, ActiveApplication& rApp) noexcept;
+};
 
-struct RedstoneTestScene;
+} // namespace testapp::redstone
 
-entt::any setup_scene(osp::Package &rPkg);
-
-void load_gl_resources(ActiveApplication& rApp);
-
-on_draw_t gen_draw(RedstoneTestScene& rScene, ActiveApplication& rApp);
-
-} // namespace enginetest
 
 } // namespace testapp

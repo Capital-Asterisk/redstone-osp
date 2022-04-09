@@ -157,6 +157,9 @@ std::unordered_map<std::string_view, Option> const g_scenes
     }}},
     {"vehicletest", {"Vehicle and glTF", [] {
         setup_common_scene<scenes::VehicleTest>();
+    }}},
+    {"redstone", {"redstone", [] {
+        setup_common_scene<testapp::redstone::Redstone>();
     }}}
 };
 
@@ -377,9 +380,6 @@ void load_a_bunch_of_stuff()
     osp::register_tinygltf_resources(g_resources);
     g_defaultPkg = g_resources.pkg_create();
 
-    osp::AssetImporter::load_sturdy_file(
-        "Redstone/redstone.gltf", rDebugPack, rDebugPack);
-
     // Load sturdy glTF files
     const std::string_view datapath = {"OSPData/adera/"};
     const std::vector<std::string_view> meshes =
@@ -402,6 +402,12 @@ void load_a_bunch_of_stuff()
         osp::assigns_prefabs_tinygltf(g_resources, res);
     }
 
+    {
+        osp::ResId res = osp::load_tinygltf_file("Redstone/redstone.gltf", g_resources, g_defaultPkg);
+        osp::assigns_prefabs_tinygltf(g_resources, res);
+    }
+
+
 
     // Add a default primitives
     auto const add_mesh_quick = [] (std::string_view name, Trade::MeshData&& data)
@@ -414,6 +420,9 @@ void load_a_bunch_of_stuff()
     add_mesh_quick("sphere", Primitives::icosphereSolid(2));
     add_mesh_quick("cylinder", Primitives::cylinderSolid(3, 16, 1.0f, CylinderFlag::CapEnds));
     add_mesh_quick("grid64solid", Primitives::grid3DSolid({63, 63}));
+
+    add_mesh_quick("cubewire", Primitives::cubeWireframe());
+    add_mesh_quick("grid64wire", Primitives::grid3DWireframe({63, 63}));
 
     OSP_LOG_INFO("Resource loading complete");
 }
